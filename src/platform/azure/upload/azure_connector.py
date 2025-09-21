@@ -26,24 +26,33 @@ class AzureConnector:
         counter = 0
 
         self.logger.info(f"Uploading to {stream_name}")
+        try:
+            for entry in generator_function():
+                batch.append(entry)
+                if len(batch) >= self.BATCH_SIZE:
+                    print(f"Uploading batch of size {len(batch)} to {dcr_stream_id} - \n {batch}")
+                    try:
+                        self.client.upload(
+                            rule_id=dcr_stream_id,
+                            stream_name=stream_name,
+                            logs=batch
+                        )
+                        counter += len(batch)
+                    except Exception as e:
+                        self.logger.error(f"Exception during upload of batch to {stream_name}: {e}")
+                    batch.clear()
 
-        for entry in generator_function():
-            batch.append(entry)
-            if len(batch) >= self.BATCH_SIZE:
-                self.client.upload(
-                    rule_id=dcr_stream_id,
-                    stream_name=stream_name,
-                    logs=batch
-                )
-                counter += len(batch)
-                batch.clear()
-
-        # upload last batch which does not exceed batch size
-        if batch:
-            self.client.upload(
-                rule_id=dcr_stream_id,
-                stream_name=stream_name,
-                logs=batch
-            )
-            counter += len(batch)
+            # upload last batch which does not exceed batch size
+            if batch:
+                try:
+                    self.client.upload(
+                        rule_id=dcr_stream_id,
+                        stream_name=stream_name,
+                        logs=batch
+                    )
+                    counter += len(batch)
+                except Exception as e:
+                    self.logger.error(f"Exception during upload of final batch to {stream_name}: {e}")
+        except Exception as e:
+            self.logger.error(f"Exception in upload_in_batches for {stream_name}: {e}")
         self.logger.info(f"Total entries uploaded: {counter} to {stream_name}")

@@ -95,14 +95,15 @@ python3 kubeforensys.py \
 
 The tool collects the following data types and uploads them to separate custom tables in Log Analytics:
 
-1. **kubelogs_CL**: Container logs from all pods
-2. **kubeevents_CL**: Kubernetes cluster events
-3. **commandhistory_CL**: Command history from containers
-4. **serviceaccounts_CL**: Service account configurations
-5. **suspiciouspods_CL**: Potentially suspicious pods
-6. **rbacbindings_CL**: RBAC bindings and roles
-7. **cronjobs_CL**: CronJob container information
-8. **networkpolicies_CL**: Network policy configurations
+1. **nodes_CL**: Cluster nodes configurations
+2. **kubelogs_CL**: Container logs from all pods
+3. **kubeevents_CL**: Kubernetes cluster events
+4. **commandhistory_CL**: Command history from containers
+5. **serviceaccounts_CL**: Service account configurations
+6. **suspiciouspods_CL**: Potentially suspicious pods
+7. **rbacbindings_CL**: RBAC bindings and roles
+8. **cronjobs_CL**: CronJob container information
+9. **networkpolicies_CL**: Network policy configurations
 
 ## Azure Infrastructure
 

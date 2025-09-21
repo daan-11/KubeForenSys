@@ -6,6 +6,9 @@ def parse_args():
     parser.add_argument("--workspace_name", type=str, help="Name of the Log Analytics workspace (default: 'KubeForenSys-LAW')")
     parser.add_argument("--dce_name", type=str, help="Name of the Data Collection Endpoint (default: 'Kube-DCE')")
     parser.add_argument("--location", type=str, help="Azure region (default: 'west-europe')")
+    parser.add_argument("--continuous", action="store_true", help="Run continuously instead of just once")
+    parser.add_argument("--interval", type=int, default=60, help="Interval in seconds between runs when --continuous is set (default: 60)")
+    parser.add_argument("--initial", action="store_true", help="If set, create LAW, DCE, DCR, and tables, then exit.")
 
     args = parser.parse_args()
 

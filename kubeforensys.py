@@ -30,29 +30,72 @@ def main():
     resource_group = os.getenv("RESOURCE_GROUP_NAME")
     cluster_name = os.getenv("CLUSTER_NAME")
 
-    provisioner = AzureLogPipelineProvisioner(
-        subscription_id=subscription_id,
-        resource_group=resource_group,
-        location=user_settings.get("location", "westeurope"),
-        workspace_name=user_settings.get("workspace_name", "KubeForenSys-LAW"),
-        dce_name=user_settings.get("dce_name", "Kube-DCE"),
-    )
 
-    # Setup Azure environment
-    result = provisioner.run()
 
-    connector = AzureConnector(endpoint_uri=result["dce_endpoint"])
+    import json
+    CONFIG_PATH = "kubeforensys_config.json"
+    dcr_mappings = None
+    connector = None
+    config_data = None
 
-    aks_addon_lister = AksAddonLister(subscription_id, resource_group)
-
-    # Check whether the monitoring addon is installed and enabled. If so, no need to manually collect as this is already done
-    monitoring_enabled = aks_addon_lister.get_enabled_addon_for_cluster(cluster_name, "omsagent")
-
-    dcr_mappings = result["dcr_mappings"]
+    if user_settings.get("initial"):
+        provisioner = AzureLogPipelineProvisioner(
+            subscription_id=subscription_id,
+            resource_group=resource_group,
+            location=user_settings.get("location", "westeurope"),
+            workspace_name=user_settings.get("workspace_name", "KubeForenSys-LAW"),
+            dce_name=user_settings.get("dce_name", "Kube-DCE"),
+        )
+        result = provisioner.run()
+        logger.info("Initial provisioning complete. Proceeding to data collection.")
+        # Save DCE endpoint and DCR mappings to config file
+        config_data = {
+            "dce_endpoint": result["dce_endpoint"],
+            "dcr_mappings": result["dcr_mappings"]
+        }
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(config_data, f)
+        connector = AzureConnector(endpoint_uri=result["dce_endpoint"])
+        dcr_mappings = result["dcr_mappings"]
+    else:
+        # Load DCE endpoint and DCR mappings from config file
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                config_data = json.load(f)
+            connector = AzureConnector(endpoint_uri=config_data["dce_endpoint"])
+            dcr_mappings = config_data["dcr_mappings"]
+        except Exception as e:
+            logger.error(f"Failed to load DCE endpoint and DCR mappings from {CONFIG_PATH}: {e}")
+            raise
 
     fetcher = KubeLogFetcher(user_settings)
+    import time
+    from datetime import datetime, timezone
+
+    # Load last upload times from config if present (and not --initial)
+    table_names = [
+        "nodes_CL", "services_CL", "endpoints_CL", "deployments_CL", "replicasets_CL", "statefulsets_CL",
+        "kubelogs_CL", "kubeevents_CL", "commandhistory_CL", "serviceaccounts_CL",
+        "suspiciouspods_CL", "rbacbindings_CL", "cronjobs_CL", "networkpolicies_CL"
+    ]
+    last_fetch_times = {k: None for k in table_names}
+    if not user_settings.get("initial") and config_data and "last_upload" in config_data:
+        for k in table_names:
+            t = config_data["last_upload"].get(k)
+            if t:
+                from datetime import datetime
+                try:
+                    last_fetch_times[k] = datetime.fromisoformat(t)
+                except Exception:
+                    last_fetch_times[k] = None
 
     data_sources = {
+        "nodes_CL": fetcher.get_nodes,
+        "services_CL": fetcher.get_services,
+        "endpoints_CL": fetcher.get_endpoints,
+        "deployments_CL": fetcher.get_deployments,
+        "replicasets_CL": fetcher.get_replicasets,
+        "statefulsets_CL": fetcher.get_statefulsets,
         "kubelogs_CL": fetcher.retrieve_logs_from_pods,
         "kubeevents_CL": fetcher.retrieve_events,
         "commandhistory_CL": fetcher.retrieve_command_history,
@@ -63,15 +106,49 @@ def main():
         "networkpolicies_CL": fetcher.get_network_policies
     }
 
-    for table_name, fetch_function in data_sources.items():
-        if monitoring_enabled and table_name in ["kubelogs_CL", "kubeevents_CL"]:
-            continue  # Skip if monitoring is enabled
- 
-        connector.upload_in_batches(
-            generator_function=fetch_function,
-            stream_name=f"Custom-{table_name}",
-            dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
-        )
+    aks_addon_lister = AksAddonLister(subscription_id, resource_group)
+    monitoring_enabled = aks_addon_lister.get_enabled_addon_for_cluster(cluster_name, "omsagent")
+
+    def run_collection():
+        updated = False
+        for table_name, fetch_function in data_sources.items():
+            if monitoring_enabled and table_name in ["kubelogs_CL", "kubeevents_CL"]:
+                continue  # Skip if monitoring is enabled
+
+            since_time = last_fetch_times[table_name]
+            data_items = list(fetch_function(since_time=since_time))
+
+            def data_gen():
+                for item in data_items:
+                    yield item
+
+            if dcr_mappings:
+                connector.upload_in_batches(
+                    generator_function=data_gen,
+                    stream_name=f"Custom-{table_name}",
+                    dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
+                )
+
+            # Update last_fetch_times and config_data for this table
+            now = datetime.now(timezone.utc)
+            last_fetch_times[table_name] = now
+            if config_data is not None:
+                if "last_upload" not in config_data:
+                    config_data["last_upload"] = {}
+                config_data["last_upload"][table_name] = now.isoformat()
+                updated = True
+        # Save updated last_upload times to config file
+        if updated and not user_settings.get("initial"):
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(config_data, f)
+
+    # Run once if --initial is set (even if --continuous is not)
+    if user_settings.get("continuous"):
+        while True:
+            run_collection()
+            time.sleep(user_settings.get("interval", 60))
+    else:
+        run_collection()
 
 if __name__ == "__main__":
     main()

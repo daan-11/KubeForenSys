@@ -9,6 +9,106 @@ import tempfile
 import logging
 
 class KubeLogFetcher:
+    def get_services(self, last_service_states=None, since_time=None):
+        self.logger.info("Retrieving service info for topology/graph analysis")
+        for svc in self.v1.list_service_for_all_namespaces().items:
+            if since_time and svc.metadata.creation_timestamp and svc.metadata.creation_timestamp <= since_time:
+                continue
+            svc_uid = svc.metadata.uid
+            svc_info = {
+                "TimeGenerated": self.format_timestamp(svc.metadata.creation_timestamp),
+                "uid": svc_uid,
+                "name": svc.metadata.name,
+                "namespace": svc.metadata.namespace,
+                "labels": svc.metadata.labels,
+                "annotations": svc.metadata.annotations,
+            }
+            yield svc_info
+
+    def get_endpoints(self, last_endpoint_states=None, since_time=None):
+        self.logger.info("Retrieving endpoint info for topology/graph analysis")
+        for ep in self.v1.list_endpoints_for_all_namespaces().items:
+            if since_time and ep.metadata.creation_timestamp and ep.metadata.creation_timestamp <= since_time:
+                continue
+            ep_uid = ep.metadata.uid
+            ep_info = {
+                "TimeGenerated": self.format_timestamp(ep.metadata.creation_timestamp),
+                "uid": ep_uid,
+                "name": ep.metadata.name,
+                "namespace": ep.metadata.namespace,
+                "labels": ep.metadata.labels,
+                "annotations": ep.metadata.annotations,
+                "subsets": [s.to_dict() for s in (ep.subsets or [])]
+            }
+            yield ep_info
+
+    def get_deployments(self, last_deploy_states=None, since_time=None):
+        self.logger.info("Retrieving deployment info for topology/graph analysis")
+        apps_v1 = client.AppsV1Api()
+        for dep in apps_v1.list_deployment_for_all_namespaces().items:
+            if since_time and dep.metadata.creation_timestamp and dep.metadata.creation_timestamp <= since_time:
+                continue
+            dep_uid = dep.metadata.uid
+            dep_info = {
+                "TimeGenerated": self.format_timestamp(dep.metadata.creation_timestamp),
+                "uid": dep_uid,
+                "name": dep.metadata.name,
+                "namespace": dep.metadata.namespace,
+                "labels": dep.metadata.labels,
+                "annotations": dep.metadata.annotations,
+            }
+            yield dep_info
+
+    def get_replicasets(self, last_rs_states=None, since_time=None):
+        self.logger.info("Retrieving replicaset info for topology/graph analysis")
+        apps_v1 = client.AppsV1Api()
+        for rs in apps_v1.list_replica_set_for_all_namespaces().items:
+            if since_time and rs.metadata.creation_timestamp and rs.metadata.creation_timestamp <= since_time:
+                continue
+            rs_uid = rs.metadata.uid
+            rs_info = {
+                "TimeGenerated": self.format_timestamp(rs.metadata.creation_timestamp),
+                "uid": rs_uid,
+                "name": rs.metadata.name,
+                "namespace": rs.metadata.namespace,
+                "labels": rs.metadata.labels,
+                "annotations": rs.metadata.annotations,
+            }
+            yield rs_info
+
+    def get_statefulsets(self, last_ss_states=None, since_time=None):
+        self.logger.info("Retrieving statefulset info for topology/graph analysis")
+        apps_v1 = client.AppsV1Api()
+        for ss in apps_v1.list_stateful_set_for_all_namespaces().items:
+            if since_time and ss.metadata.creation_timestamp and ss.metadata.creation_timestamp <= since_time:
+                continue
+            ss_uid = ss.metadata.uid
+            ss_info = {
+                "TimeGenerated": self.format_timestamp(ss.metadata.creation_timestamp),
+                "uid": ss_uid,
+                "name": ss.metadata.name,
+                "namespace": ss.metadata.namespace,
+                "labels": ss.metadata.labels,
+                "annotations": ss.metadata.annotations,
+            }
+            yield ss_info
+    
+    def get_nodes(self, last_node_states=None, since_time=None):
+        self.logger.info("Retrieving node info for topology/graph analysis")
+        for node in self.v1.list_node().items:
+            if since_time and node.metadata.creation_timestamp and node.metadata.creation_timestamp <= since_time:
+                continue
+            node_uid = node.metadata.uid
+            node_info = {
+                "TimeGenerated": self.format_timestamp(node.metadata.creation_timestamp),
+                "uid": node_uid,
+                "name": node.metadata.name,
+                "labels": node.metadata.labels,
+                "taints": [t.to_dict() for t in (node.spec.taints or [])],
+                "annotations": node.metadata.annotations,
+            }
+            yield node_info
+    
     def __init__(self, user_settings):
         self.logger = logging.getLogger("kubeLogger")
         try:
@@ -42,7 +142,9 @@ class KubeLogFetcher:
         except ApiException as e:
             self.logger.error(f"Error fetching pods: {e}")
 
-    def retrieve_logs_from_pods(self):
+
+
+    def retrieve_logs_from_pods(self, since_time=None):
         for pod in self.get_pods_stream():
             try:
                 if not pod.status.container_statuses:
@@ -78,15 +180,28 @@ class KubeLogFetcher:
                             for raw_line in log_response:
                                 line = raw_line.decode("utf-8")
                                 timestamp, message = line.split(" ", maxsplit=1)
+                                # If since_time is set, filter logs by log line timestamp
+                                if since_time:
+                                    from datetime import datetime
+                                    try:
+                                        log_time = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                                    except Exception:
+                                        continue
+                                    if log_time <= since_time:
+                                        continue
                                 yield {
-                                    "TimeGenerated": timestamp,
+                                    "TimeGenerated": self.format_timestamp(timestamp),
                                     "message": message,
                                     "container_name": container_name,
+                                    "container_restart_count": container_status.restart_count,
                                     "namespace": pod.metadata.namespace,
                                     "pod_name": pod.metadata.name,
                                     "images": [c.image for c in pod.spec.containers],
                                     "labels": pod.metadata.labels,
                                     "annotations": pod.metadata.annotations,
+                                    "ownerReferences": [ref.to_dict() for ref in (pod.metadata.owner_references or [])],
+                                    "nodeName": pod.spec.node_name,
+                                    "podIP": pod.status.pod_ip
                                 }
 
                         except ApiException as e:
@@ -99,12 +214,15 @@ class KubeLogFetcher:
         # Format from datetime object to plain string, since a datetime is not serializable
         return str(timestamp) if timestamp else ""
 
-    def retrieve_events(self):
+    def retrieve_events(self, since_time=None):
         self.logger.info("Fetching events for all namespaces")
         data = self.v1.list_event_for_all_namespaces().items
         for event in data:
+            event_time = event.metadata.creation_timestamp
+            if since_time and event_time and event_time <= since_time:
+                continue
             yield {
-                "TimeGenerated": self.format_timestamp(event.metadata.creation_timestamp),
+                "TimeGenerated": self.format_timestamp(event_time),
                 "first_timestamp": self.format_timestamp(event.first_timestamp),
                 "last_timestamp": self.format_timestamp(event.last_timestamp) if event.last_timestamp else "",
                 "action": event.action,
@@ -115,7 +233,7 @@ class KubeLogFetcher:
                 "reporting_component": event.reporting_instance
             }
     
-    def retrieve_command_history(self):
+    def retrieve_command_history(self, since_time=None):
         
         HISTORY_PATHS = [
         "/root/.ash_history",
@@ -142,6 +260,7 @@ class KubeLogFetcher:
                                 for line in f:
                                     line = line.strip()
                                     if line:
+                                        # Optionally filter by since_time if needed (not timestamped, so skip for now)
                                         yield {
                                             "TimeGenerated": datetime.utcnow().isoformat(),
                                             "namespace": pod.metadata.namespace,
@@ -155,12 +274,15 @@ class KubeLogFetcher:
                         except FileNotFoundError:
                             continue
     
-    def get_service_accounts(self):
+    def get_service_accounts(self, since_time=None):
         self.logger.info("Retrieving service accounts")
         for ns in self.v1.list_namespace().items:
             namespace = ns.metadata.name
             for sa in self.v1.list_namespaced_service_account(namespace).items:
                 creation_timestamp = self.format_timestamp(sa.metadata.creation_timestamp)
+                # Only yield if created after since_time
+                if since_time and sa.metadata.creation_timestamp and sa.metadata.creation_timestamp <= since_time:
+                    continue
                 yield {
                     "TimeGenerated": creation_timestamp,
                     "namespace": namespace,
@@ -169,11 +291,14 @@ class KubeLogFetcher:
                     "image_pull_secrets": sa.image_pull_secrets
                 }
     
-    def get_suspicious_pods(self):
+    def get_suspicious_pods(self, since_time=None):
         self.logger.info("Retrieving possibly suspicious pods")
         for pod in self.get_pods_stream():
 
             creation_timestamp = self.format_timestamp(pod.metadata.creation_timestamp)
+            # Only yield if created after since_time
+            if since_time and pod.metadata.creation_timestamp and pod.metadata.creation_timestamp <= since_time:
+                continue
 
             name = pod.metadata.name
             ns = pod.metadata.namespace
@@ -214,14 +339,29 @@ class KubeLogFetcher:
                         "details": f"hostPath: {volume.host_path.path}, type: {vol_type}"
                     }
 
-    def get_rbac_bindings(self):
+    def get_rbac_bindings(self, since_time=None):
         self.logger.info("Retrieving RBAC bindings")
         for binding in self.rbac_v1.list_role_binding_for_all_namespaces().items:
+            if since_time and binding.metadata.creation_timestamp and binding.metadata.creation_timestamp <= since_time:
+                continue
             creation_timestamp = self.format_timestamp(binding.metadata.creation_timestamp)
             binding_name = binding.metadata.name
             namespace = binding.metadata.namespace
             role_ref_kind = binding.role_ref.kind
             role_ref_name = binding.role_ref.name
+            role_ref_api_group = getattr(binding.role_ref, "api_group", None)
+
+            # Try to fetch rules for the referenced role
+            rules = None
+            try:
+                if role_ref_kind == "Role":
+                    role = self.rbac_v1.read_namespaced_role(role_ref_name, namespace)
+                    rules = [r.to_dict() for r in (role.rules or [])]
+                elif role_ref_kind == "ClusterRole":
+                    role = self.rbac_v1.read_cluster_role(role_ref_name)
+                    rules = [r.to_dict() for r in (role.rules or [])]
+            except Exception as e:
+                self.logger.warning(f"Could not fetch rules for {role_ref_kind} {role_ref_name}: {e}")
 
             for subject in binding.subjects or []:
                 yield {
@@ -233,15 +373,35 @@ class KubeLogFetcher:
                     "subject_name": subject.name,
                     "subject_namespace": getattr(subject, "namespace", namespace),
                     "role_ref_kind": role_ref_kind,
-                    "role_ref_name": role_ref_name
+                    "role_ref_name": role_ref_name,
+                    "role_ref_api_group": role_ref_api_group,
+                    "rules": rules,
+                    "subjects": [s.to_dict() for s in (binding.subjects or [])],
+                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None
                 }
-        
+
         for binding in self.rbac_v1.list_cluster_role_binding().items:
+            if since_time and binding.metadata.creation_timestamp and binding.metadata.creation_timestamp <= since_time:
+                continue
             creation_timestamp = self.format_timestamp(binding.metadata.creation_timestamp)
             binding_name = binding.metadata.name
             namespace = binding.metadata.namespace
             role_ref_kind = binding.role_ref.kind
             role_ref_name = binding.role_ref.name
+            role_ref_api_group = getattr(binding.role_ref, "api_group", None)
+
+            # Try to fetch rules for the referenced role
+            rules = None
+            try:
+                if role_ref_kind == "Role":
+                    # ClusterRoleBinding should not reference Role, but handle just in case
+                    role = self.rbac_v1.read_namespaced_role(role_ref_name, namespace)
+                    rules = [r.to_dict() for r in (role.rules or [])]
+                elif role_ref_kind == "ClusterRole":
+                    role = self.rbac_v1.read_cluster_role(role_ref_name)
+                    rules = [r.to_dict() for r in (role.rules or [])]
+            except Exception as e:
+                self.logger.warning(f"Could not fetch rules for {role_ref_kind} {role_ref_name}: {e}")
 
             for subject in binding.subjects or []:
                 yield {
@@ -253,10 +413,14 @@ class KubeLogFetcher:
                     "subject_name": subject.name,
                     "subject_namespace": getattr(subject, "namespace", namespace),
                     "role_ref_kind": role_ref_kind,
-                    "role_ref_name": role_ref_name
+                    "role_ref_name": role_ref_name,
+                    "role_ref_api_group": role_ref_api_group,
+                    "rules": rules,
+                    "subjects": [s.to_dict() for s in (binding.subjects or [])],
+                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None
                 }
     
-    def get_cronjob_containers_info(self):
+    def get_cronjob_containers_info(self, since_time=None):
         self.logger.info("Extracting CronJob container info")
         for cj in self.batch_v1.list_cron_job_for_all_namespaces().items:
             creation_timestamp = self.format_timestamp(cj.metadata.creation_timestamp)
@@ -264,6 +428,8 @@ class KubeLogFetcher:
             namespace = cj.metadata.namespace
             containers = cj.spec.job_template.spec.template.spec.containers
 
+            if since_time and cj.metadata.creation_timestamp and cj.metadata.creation_timestamp <= since_time:
+                continue
             for c in containers:
                 command_str = " ".join(c.command) if c.command else ""
                 yield {
@@ -276,12 +442,15 @@ class KubeLogFetcher:
                     "schedule": cj.spec.schedule
                 }
 
-    def get_network_policies(self):
+    def get_network_policies(self, since_time=None):
         self.logger.info("Retrieving Network Policies")
         for np in self.networking_v1.list_network_policy_for_all_namespaces().items:
             creation_timestamp = self.format_timestamp(np.metadata.creation_timestamp)
+            if since_time and np.metadata.creation_timestamp and np.metadata.creation_timestamp <= since_time:
+                continue
             yield {
                 "TimeGenerated": creation_timestamp,
                 "namespace": np.metadata.namespace,
-                "name": np.metadata.name
+                "name": np.metadata.name,
+                "rules": np.spec.to_dict() if hasattr(np, "spec") and np.spec else None
             }

@@ -66,13 +66,23 @@ class AzureLogPipelineProvisioner:
             "properties": {
                 "schema": {
                     "name": table_name,
-                    "columns": table_columns
+                    "columns": [
+                        {
+                            "name": col["name"],
+                            "type": col["type"].lower().replace("int32", "int").replace("datetime", "datetime")
+                        }
+                        for col in table_columns
+                    ]
                 },
+                "plan": "Analytics",
                 "retentionInDays": 30
             }
         }
         resp = requests.put(url, headers=self.headers, data=json.dumps(payload))
+        if not resp.ok:
+            self.logger.error(f"Azure API error: {resp.status_code} - {resp.text}")
         resp.raise_for_status()
+
         self.logger.info(f"[+] Created custom table {table_name} successfully")
         self.created_resources.append({
             "type": "table",
@@ -118,7 +128,10 @@ class AzureLogPipelineProvisioner:
                 "dataCollectionEndpointId": self.dce_id,
                 "streamDeclarations": {
                     custom_stream_name: {
-                        "columns": [{"name": col["name"], "type": col["type"].lower()} for col in table["columns"]]
+                        "columns": [
+                            {"name": col["name"], "type": ("int" if col["type"].lower() == "int32" else col["type"].lower())}
+                            for col in table["columns"]
+                        ]
                     }
                 },
                 "dataSources": {
@@ -150,6 +163,8 @@ class AzureLogPipelineProvisioner:
 
 
         dcr_resp = requests.put(dcr_url, headers=self.headers, data=json.dumps(dcr_payload))
+        if not dcr_resp.ok:
+            self.logger.error(f"Azure API error: {dcr_resp.status_code} - {dcr_resp.text}")
         dcr_resp.raise_for_status()
         immutable_dcr_id = dcr_resp.json()["properties"]["immutableId"]
         self.logger.info(f"[+] DCR {dcr_name} created successfully.")
@@ -171,17 +186,89 @@ class AzureLogPipelineProvisioner:
             }
 
             tables = [{
-                "name": "kubelogs_CL",
-                "columns" : [
-                    {"name": "TimeGenerated", "type": "DateTime"},
-                    {"name": "message", "type": "String"},
-                    {"name": "container_name", "type": "String"},
-                    {"name": "namespace", "type": "String"},
-                    {"name": "pod_name", "type": "String"},
-                    {"name": "containerimages", "type": "String"},
-                    {"name": "labels", "type": "String"},
-                    {"name": "annotations", "type": "String"},
-                ]
+                    "name": "nodes_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "uid", "type": "String"},
+                        {"name": "name", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "taints", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                    ]
+                },
+                {
+                    "name": "services_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "uid", "type": "String"},
+                        {"name": "name", "type": "String"},
+                        {"name": "namespace", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                    ]
+                },
+                {
+                    "name": "endpoints_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "uid", "type": "String"},
+                        {"name": "name", "type": "String"},
+                        {"name": "namespace", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                        {"name": "subsets", "type": "String"}
+                    ]
+                },
+                {
+                    "name": "deployments_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "uid", "type": "String"},
+                        {"name": "name", "type": "String"},
+                        {"name": "namespace", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                    ]
+                },
+                {
+                    "name": "replicasets_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "uid", "type": "String"},
+                        {"name": "name", "type": "String"},
+                        {"name": "namespace", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                    ]
+                },
+                {
+                    "name": "statefulsets_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "uid", "type": "String"},
+                        {"name": "name", "type": "String"},
+                        {"name": "namespace", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                    ]
+                },
+                {
+                    "name": "kubelogs_CL",
+                    "columns" : [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "message", "type": "String"},
+                        {"name": "container_name", "type": "String"},
+                        {"name": "container_state", "type": "String"},
+                        {"name": "container_restart_count", "type": "Int32"},
+                        {"name": "namespace", "type": "String"},
+                        {"name": "pod_name", "type": "String"},
+                        {"name": "containerimages", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                        {"name": "ownerReferences", "type": "String"},
+                        {"name": "nodeName", "type": "String"},
+                        {"name": "podIP", "type": "String"},
+                    ]
                 },
                 {
                     "name": "kubeevents_CL",
@@ -238,7 +325,11 @@ class AzureLogPipelineProvisioner:
                         {"name": "subject_name", "type": "String"},
                         {"name": "subject_namespace", "type": "String"},
                         {"name": "role_ref_kind", "type": "String"},
-                        {"name": "role_ref_name", "type": "String"}
+                        {"name": "role_ref_name", "type": "String"},
+                        {"name": "role_ref_api_group", "type": "String"},
+                        {"name": "rules", "type": "String"},
+                        {"name": "subjects", "type": "String"},
+                        {"name": "roleRef", "type": "String"}
                     ]
                 },
                 {
@@ -258,7 +349,8 @@ class AzureLogPipelineProvisioner:
                     "columns": [
                         {"name": "TimeGenerated", "type": "DateTime"},
                         {"name": "namespace", "type": "String"},
-                        {"name": "name", "type": "String"}
+                        {"name": "name", "type": "String"},
+                        {"name": "rules", "type": "String"}
                     ]
                 }
             ]
