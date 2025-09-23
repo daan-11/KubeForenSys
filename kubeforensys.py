@@ -74,9 +74,10 @@ def main():
 
     # Load last upload times from config if present (and not --initial)
     table_names = [
-        "nodes_CL", "services_CL", "endpoints_CL", "deployments_CL", "replicasets_CL", "statefulsets_CL",
-        "kubelogs_CL", "kubeevents_CL", "commandhistory_CL", "serviceaccounts_CL",
-        "suspiciouspods_CL", "rbacbindings_CL", "cronjobs_CL", "networkpolicies_CL"
+        "nodes_CL", "services_CL", "endpoints_CL", "deployments_CL", "replicasets_CL",
+        "statefulsets_CL", "namespaces_CL", "kubelogs_CL", "kubeevents_CL", 
+        "commandhistory_CL", "serviceaccounts_CL", "suspiciouspods_CL", "rbacbindings_CL", 
+        "cronjobs_CL", "networkpolicies_CL"
     ]
     last_fetch_times = {k: None for k in table_names}
     if not user_settings.get("initial") and config_data and "last_upload" in config_data:
@@ -96,6 +97,7 @@ def main():
         "deployments_CL": fetcher.get_deployments,
         "replicasets_CL": fetcher.get_replicasets,
         "statefulsets_CL": fetcher.get_statefulsets,
+        "namespaces_CL": fetcher.get_namespaces,
         "kubelogs_CL": fetcher.retrieve_logs_from_pods,
         "kubeevents_CL": fetcher.retrieve_events,
         "commandhistory_CL": fetcher.retrieve_command_history,

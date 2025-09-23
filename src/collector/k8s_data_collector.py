@@ -9,6 +9,24 @@ import tempfile
 import logging
 
 class KubeLogFetcher:
+
+    def get_namespaces(self, since_time=None):
+        self.logger.info("Retrieving namespaces and tracking deletions")
+        # Active namespaces
+        for ns in self.v1.list_namespace().items:
+            if since_time and ns.metadata.creation_timestamp and ns.metadata.creation_timestamp <= since_time:
+                continue
+            yield {
+                "TimeGenerated": self.format_timestamp(ns.metadata.creation_timestamp),
+                "name": ns.metadata.name,
+                "status": ns.status.phase,
+                "labels": ns.metadata.labels,
+                "annotations": ns.metadata.annotations,
+                "deletionTimestamp": self.format_timestamp(getattr(ns.metadata, "deletion_timestamp", None)),
+                "deleted": bool(getattr(ns.metadata, "deletion_timestamp", None))
+            }
+
+
     def get_services(self, last_service_states=None, since_time=None):
         self.logger.info("Retrieving service info for topology/graph analysis")
         for svc in self.v1.list_service_for_all_namespaces().items:

@@ -253,6 +253,18 @@ class AzureLogPipelineProvisioner:
                     ]
                 },
                 {
+                    "name": "namespaces_CL",
+                    "columns": [
+                        {"name": "TimeGenerated", "type": "DateTime"},
+                        {"name": "name", "type": "String"},
+                        {"name": "status", "type": "String"},
+                        {"name": "labels", "type": "String"},
+                        {"name": "annotations", "type": "String"},
+                        {"name": "deletionTimestamp", "type": "DateTime"},
+                        {"name": "deleted", "type": "Boolean"}
+                    ]
+                },
+                {
                     "name": "kubelogs_CL",
                     "columns" : [
                         {"name": "TimeGenerated", "type": "DateTime"},
