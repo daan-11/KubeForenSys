@@ -140,7 +140,6 @@ def main():
                 config_data["last_upload"][table_name] = now.isoformat()
                 updated = True
         # Save updated last_upload times to config file
-        if updated and not user_settings.get("initial"):
             with open(CONFIG_PATH, "w") as f:
                 json.dump(config_data, f)
 
