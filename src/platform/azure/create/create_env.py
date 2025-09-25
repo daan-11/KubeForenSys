@@ -205,6 +205,7 @@ class AzureLogPipelineProvisioner:
                         {"name": "namespace", "type": "String"},
                         {"name": "labels", "type": "String"},
                         {"name": "annotations", "type": "String"},
+                        {"name": "deleted", "type": "Boolean"}
                     ]
                 },
                 {
@@ -260,7 +261,6 @@ class AzureLogPipelineProvisioner:
                         {"name": "status", "type": "String"},
                         {"name": "labels", "type": "String"},
                         {"name": "annotations", "type": "String"},
-                        {"name": "deletionTimestamp", "type": "DateTime"},
                         {"name": "deleted", "type": "Boolean"}
                     ]
                 },
@@ -313,7 +313,8 @@ class AzureLogPipelineProvisioner:
                         {"name": "namespace", "type": "String"},
                         {"name": "name", "type": "String"},
                         {"name": "automount_service_account_token", "type": "String"},
-                        {"name": "image_pull_secrets", "type": "String"}
+                        {"name": "image_pull_secrets", "type": "String"},
+                        {"name": "deleted", "type": "Boolean"}
                     ]
                 },
                 {
@@ -341,7 +342,8 @@ class AzureLogPipelineProvisioner:
                         {"name": "role_ref_api_group", "type": "String"},
                         {"name": "rules", "type": "String"},
                         {"name": "subjects", "type": "String"},
-                        {"name": "roleRef", "type": "String"}
+                        {"name": "roleRef", "type": "String"},
+                        {"name": "deleted", "type": "Boolean"}
                     ]
                 },
                 {
@@ -362,7 +364,8 @@ class AzureLogPipelineProvisioner:
                         {"name": "TimeGenerated", "type": "DateTime"},
                         {"name": "namespace", "type": "String"},
                         {"name": "name", "type": "String"},
-                        {"name": "rules", "type": "String"}
+                        {"name": "rules", "type": "String"},
+                        {"name": "deleted", "type": "Boolean"}
                     ]
                 }
             ]

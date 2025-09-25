@@ -10,28 +10,22 @@ import logging
 
 class KubeLogFetcher:
 
-    def get_namespaces(self, since_time=None):
+    def get_namespaces(self):
         self.logger.info("Retrieving namespaces and tracking deletions")
-        # Active namespaces
         for ns in self.v1.list_namespace().items:
-            if since_time and ns.metadata.creation_timestamp and ns.metadata.creation_timestamp <= since_time:
-                continue
             yield {
                 "TimeGenerated": self.format_timestamp(ns.metadata.creation_timestamp),
                 "name": ns.metadata.name,
                 "status": ns.status.phase,
                 "labels": ns.metadata.labels,
                 "annotations": ns.metadata.annotations,
-                "deletionTimestamp": self.format_timestamp(getattr(ns.metadata, "deletion_timestamp", None)),
-                "deleted": bool(getattr(ns.metadata, "deletion_timestamp", None))
+                "deleted": False
             }
 
 
-    def get_services(self, last_service_states=None, since_time=None):
+    def get_services(self, last_service_states=None):
         self.logger.info("Retrieving service info for topology/graph analysis")
         for svc in self.v1.list_service_for_all_namespaces().items:
-            if since_time and svc.metadata.creation_timestamp and svc.metadata.creation_timestamp <= since_time:
-                continue
             svc_uid = svc.metadata.uid
             svc_info = {
                 "TimeGenerated": self.format_timestamp(svc.metadata.creation_timestamp),
@@ -40,6 +34,7 @@ class KubeLogFetcher:
                 "namespace": svc.metadata.namespace,
                 "labels": svc.metadata.labels,
                 "annotations": svc.metadata.annotations,
+                "deleted": False
             }
             yield svc_info
 
@@ -292,21 +287,19 @@ class KubeLogFetcher:
                         except FileNotFoundError:
                             continue
     
-    def get_service_accounts(self, since_time=None):
+    def get_service_accounts(self):
         self.logger.info("Retrieving service accounts")
         for ns in self.v1.list_namespace().items:
             namespace = ns.metadata.name
             for sa in self.v1.list_namespaced_service_account(namespace).items:
                 creation_timestamp = self.format_timestamp(sa.metadata.creation_timestamp)
-                # Only yield if created after since_time
-                if since_time and sa.metadata.creation_timestamp and sa.metadata.creation_timestamp <= since_time:
-                    continue
                 yield {
                     "TimeGenerated": creation_timestamp,
                     "namespace": namespace,
                     "name": sa.metadata.name,
                     "automount_service_account_token": sa.automount_service_account_token,
-                    "image_pull_secrets": sa.image_pull_secrets
+                    "image_pull_secrets": sa.image_pull_secrets,
+                    "deleted": False
                 }
     
     def get_suspicious_pods(self, since_time=None):
@@ -357,11 +350,9 @@ class KubeLogFetcher:
                         "details": f"hostPath: {volume.host_path.path}, type: {vol_type}"
                     }
 
-    def get_rbac_bindings(self, since_time=None):
+    def get_rbac_bindings(self):
         self.logger.info("Retrieving RBAC bindings")
         for binding in self.rbac_v1.list_role_binding_for_all_namespaces().items:
-            if since_time and binding.metadata.creation_timestamp and binding.metadata.creation_timestamp <= since_time:
-                continue
             creation_timestamp = self.format_timestamp(binding.metadata.creation_timestamp)
             binding_name = binding.metadata.name
             namespace = binding.metadata.namespace
@@ -395,12 +386,11 @@ class KubeLogFetcher:
                     "role_ref_api_group": role_ref_api_group,
                     "rules": rules,
                     "subjects": [s.to_dict() for s in (binding.subjects or [])],
-                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None
+                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None,
+                    "deleted": False
                 }
 
         for binding in self.rbac_v1.list_cluster_role_binding().items:
-            if since_time and binding.metadata.creation_timestamp and binding.metadata.creation_timestamp <= since_time:
-                continue
             creation_timestamp = self.format_timestamp(binding.metadata.creation_timestamp)
             binding_name = binding.metadata.name
             namespace = binding.metadata.namespace
@@ -435,7 +425,8 @@ class KubeLogFetcher:
                     "role_ref_api_group": role_ref_api_group,
                     "rules": rules,
                     "subjects": [s.to_dict() for s in (binding.subjects or [])],
-                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None
+                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None,
+                    "deleted": False
                 }
     
     def get_cronjob_containers_info(self, since_time=None):
@@ -460,15 +451,14 @@ class KubeLogFetcher:
                     "schedule": cj.spec.schedule
                 }
 
-    def get_network_policies(self, since_time=None):
+    def get_network_policies(self):
         self.logger.info("Retrieving Network Policies")
         for np in self.networking_v1.list_network_policy_for_all_namespaces().items:
             creation_timestamp = self.format_timestamp(np.metadata.creation_timestamp)
-            if since_time and np.metadata.creation_timestamp and np.metadata.creation_timestamp <= since_time:
-                continue
             yield {
                 "TimeGenerated": creation_timestamp,
                 "namespace": np.metadata.namespace,
                 "name": np.metadata.name,
-                "rules": np.spec.to_dict() if hasattr(np, "spec") and np.spec else None
+                "rules": np.spec.to_dict() if hasattr(np, "spec") and np.spec else None,
+                "deleted": False
             }

@@ -90,6 +90,16 @@ def main():
                 except Exception:
                     last_fetch_times[k] = None
 
+    # Data sources for stateful resources
+    stateful_resources = {
+        "namespaces_CL": fetcher.get_namespaces,
+        "services_CL": fetcher.get_services,
+        "serviceaccounts_CL": fetcher.get_service_accounts,
+        "rbacbindings_CL": fetcher.get_rbac_bindings,
+        "networkpolicies_CL": fetcher.get_network_policies
+    }
+
+    # All data sources
     data_sources = {
         "nodes_CL": fetcher.get_nodes,
         "services_CL": fetcher.get_services,
@@ -113,33 +123,106 @@ def main():
 
     def run_collection():
         updated = False
+        # Load last seen state for stateful resources
+        if config_data is not None and "last_seen_state" in config_data:
+            last_seen_state = config_data["last_seen_state"]
+        else:
+            last_seen_state = {}
+
         for table_name, fetch_function in data_sources.items():
             if monitoring_enabled and table_name in ["kubelogs_CL", "kubeevents_CL"]:
                 continue  # Skip if monitoring is enabled
 
-            since_time = last_fetch_times[table_name]
-            data_items = list(fetch_function(since_time=since_time))
+            # Stateful resource diff logic
+            if table_name in stateful_resources:
+                # Get current state as dict keyed by unique id (name+namespace or uid)
+                current_items = list(fetch_function())
+                # Use a unique key for each resource type
+                def get_key(item):
+                    if table_name == "namespaces_CL":
+                        return item["name"]
+                    elif table_name == "services_CL":
+                        return f"{item['namespace']}:{item['name']}"
+                    elif table_name == "serviceaccounts_CL":
+                        return f"{item['namespace']}:{item['name']}"
+                    elif table_name == "rbacbindings_CL":
+                        return f"{item['namespace']}:{item['binding_name']}"
+                    elif table_name == "networkpolicies_CL":
+                        return f"{item['namespace']}:{item['name']}"
+                    else:
+                        return item.get("uid") or item.get("name")
 
-            def data_gen():
-                for item in data_items:
-                    yield item
+                current_state = {get_key(item): item for item in current_items}
+                prev_state = last_seen_state.get(table_name, {})
 
-            if dcr_mappings:
-                connector.upload_in_batches(
-                    generator_function=data_gen,
-                    stream_name=f"Custom-{table_name}",
-                    dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
-                )
+                # Detect additions
+                additions = [item for k, item in current_state.items() if k not in prev_state]
+                # Detect deletions
+                deletions = [item for k, item in prev_state.items() if k not in current_state]
 
-            # Update last_fetch_times and config_data for this table
-            now = datetime.now(timezone.utc)
-            last_fetch_times[table_name] = now
-            if config_data is not None:
-                if "last_upload" not in config_data:
-                    config_data["last_upload"] = {}
-                config_data["last_upload"][table_name] = now.isoformat()
-                updated = True
-        # Save updated last_upload times to config file
+                # Send additions
+                if additions and dcr_mappings:
+                    def add_gen():
+                        for item in additions:
+                            yield item
+                    connector.upload_in_batches(
+                        generator_function=add_gen,
+                        stream_name=f"Custom-{table_name}",
+                        dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
+                    )
+
+                # Send deletions as custom log entries
+                if deletions and dcr_mappings:
+                    def del_gen():
+                        for item in deletions:
+                            del_log = dict(item)
+                            del_log["TimeGenerated"] = datetime.now(timezone.utc).isoformat()
+                            del_log["deleted"] = True
+                            yield del_log
+                    connector.upload_in_batches(
+                        generator_function=del_gen,
+                        stream_name=f"Custom-{table_name}",
+                        dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
+                    )
+
+                # Update last seen state
+                last_seen_state[table_name] = current_state
+                if config_data is not None:
+                    config_data["last_seen_state"] = last_seen_state
+                    updated = True
+
+                # Always update last_upload time for this table
+                now = datetime.now(timezone.utc)
+                last_fetch_times[table_name] = now
+                if config_data is not None:
+                    if "last_upload" not in config_data:
+                        config_data["last_upload"] = {}
+                    config_data["last_upload"][table_name] = now.isoformat()
+                    updated = True
+            else:
+                # Non-stateful: just fetch and upload as before
+                since_time = last_fetch_times[table_name]
+                data_items = list(fetch_function(since_time=since_time))
+                def data_gen():
+                    for item in data_items:
+                        yield item
+                if dcr_mappings:
+                    connector.upload_in_batches(
+                        generator_function=data_gen,
+                        stream_name=f"Custom-{table_name}",
+                        dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
+                    )
+                # Update last_upload time for this table
+                now = datetime.now(timezone.utc)
+                last_fetch_times[table_name] = now
+                if config_data is not None:
+                    if "last_upload" not in config_data:
+                        config_data["last_upload"] = {}
+                    config_data["last_upload"][table_name] = now.isoformat()
+                    updated = True
+
+        # Save updated last_upload times and last_seen_state to config file
+        if updated:
             with open(CONFIG_PATH, "w") as f:
                 json.dump(config_data, f)
 

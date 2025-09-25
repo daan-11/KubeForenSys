@@ -209,3 +209,6 @@ __marimo__/
 # sh scripts for easy start and stop of the cluster
 start.sh
 stop.sh
+
+# state file
+kubeforensys_config.json
