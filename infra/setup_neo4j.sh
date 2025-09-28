@@ -4,10 +4,9 @@
 set -e
 
 VM_PUBLIC_IP="$1"
+NEO4J_PASSWORD="$2"
 NEO4J_VERSION="5"
-NEO4J_PASSWORD=$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)
 echo "$NEO4J_PASSWORD" > neo4j-password.txt
-echo "Generated Neo4j password: $NEO4J_PASSWORD (also saved to neo4j-password.txt)"
 
 wget -O - https://debian.neo4j.com/neotechnology.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/neo4j-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/neo4j-archive-keyring.gpg] https://debian.neo4j.com stable $NEO4J_VERSION" | sudo tee /etc/apt/sources.list.d/neo4j.list

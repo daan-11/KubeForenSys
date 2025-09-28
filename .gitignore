@@ -206,9 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# sh scripts for easy start and stop of the cluster
-start.sh
-stop.sh
-
 # state file
-kubeforensys_config.json
+cluster_state.json
+neo4j-credentials.json

@@ -33,7 +33,7 @@ def main():
 
 
     import json
-    CONFIG_PATH = "kubeforensys_config.json"
+    CONFIG_PATH = "cluster_state.json"
     dcr_mappings = None
     connector = None
     config_data = None
@@ -71,6 +71,8 @@ def main():
     fetcher = KubeLogFetcher(user_settings)
     import time
     from datetime import datetime, timezone
+    from src.graphing.neo4j_graph_builder import Neo4jGraphBuilder
+    graph_builder = Neo4jGraphBuilder()
 
     # Load last upload times from config if present (and not --initial)
     table_names = [
@@ -135,9 +137,7 @@ def main():
 
             # Stateful resource diff logic
             if table_name in stateful_resources:
-                # Get current state as dict keyed by unique id (name+namespace or uid)
                 current_items = list(fetch_function())
-                # Use a unique key for each resource type
                 def get_key(item):
                     if table_name == "namespaces_CL":
                         return item["name"]
@@ -160,7 +160,16 @@ def main():
                 # Detect deletions
                 deletions = [item for k, item in prev_state.items() if k not in current_state]
 
-                # Send additions
+                # Update graph for additions
+                for item in additions:
+                    graph_builder.upsert_node(table_name.replace('_CL',''), item)
+
+                # Update graph for deletions
+                for item in deletions:
+                    key = get_key(item)
+                    graph_builder.delete_node(table_name.replace('_CL',''), key)
+
+                # Send additions to Azure
                 if additions and dcr_mappings:
                     def add_gen():
                         for item in additions:
@@ -200,9 +209,11 @@ def main():
                     config_data["last_upload"][table_name] = now.isoformat()
                     updated = True
             else:
-                # Non-stateful: just fetch and upload as before
                 since_time = last_fetch_times[table_name]
                 data_items = list(fetch_function(since_time=since_time))
+                # Update graph for each item (add/update)
+                for item in data_items:
+                    graph_builder.upsert_node(table_name.replace('_CL',''), item)
                 def data_gen():
                     for item in data_items:
                         yield item
@@ -212,7 +223,6 @@ def main():
                         stream_name=f"Custom-{table_name}",
                         dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
                     )
-                # Update last_upload time for this table
                 now = datetime.now(timezone.utc)
                 last_fetch_times[table_name] = now
                 if config_data is not None:
@@ -231,8 +241,10 @@ def main():
         while True:
             run_collection()
             time.sleep(user_settings.get("interval", 60))
+        graph_builder.close()
     else:
         run_collection()
+        graph_builder.close()
 
 if __name__ == "__main__":
     main()
