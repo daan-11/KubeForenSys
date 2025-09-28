@@ -234,6 +234,7 @@ class KubeLogFetcher:
             event_time = event.metadata.creation_timestamp
             if since_time and event_time and event_time <= since_time:
                 continue
+            namespace = getattr(event.involved_object, "namespace", None)
             yield {
                 "TimeGenerated": self.format_timestamp(event_time),
                 "first_timestamp": self.format_timestamp(event.first_timestamp),
@@ -243,6 +244,7 @@ class KubeLogFetcher:
                 "message": event.message,
                 "involved_object_uid": event.involved_object.uid,
                 "involved_object_name": event.involved_object.name,
+                "namespace": namespace,
                 "reporting_component": event.reporting_instance
             }
     

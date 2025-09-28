@@ -290,6 +290,7 @@ class AzureLogPipelineProvisioner:
                         {"name": "first_timestamp", "type": "DateTime"},
                         {"name": "involved_object_name", "type": "String"},
                         {"name": "involved_object_uid", "type": "String"},
+                        {"name": "namespace", "type": "String"},
                         {"name": "last_timestamp", "type": "DateTime"},
                         {"name": "message", "type": "String"},
                         {"name": "reason", "type": "String"},

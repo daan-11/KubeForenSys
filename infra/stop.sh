@@ -4,7 +4,8 @@ set -euo pipefail
 RESOURCE_GROUP="RP-daan"
 AKS_CLUSTER="myAKSCluster"
 LAW_NAME="KubeForenSys-LAW"
-STATE_FILE="../kubeforensys_config.json"
+STATE_FILE="../cluster_state.json"
+CREDENTIALS_FILE="../neo4j-credentials.json"
 
 echo "Deleting all Data Collection Rules (DCRs) in $RESOURCE_GROUP..."
 for dcr in $(az monitor data-collection rule list -g $RESOURCE_GROUP --query "[].name" -o tsv); do
@@ -36,6 +37,8 @@ done
 
 echo "Deleting state file: $STATE_FILE..."
 rm -f $STATE_FILE
+echo "Deleting credentials file: $CREDENTIALS_FILE..."
+rm -f $CREDENTIALS_FILE
 
 VM_NAME="neo4j-vm"
 echo "Deleting VM: $VM_NAME in $RESOURCE_GROUP..."

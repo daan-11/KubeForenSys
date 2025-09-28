@@ -125,6 +125,19 @@ def main():
 
     def run_collection():
         updated = False
+        # Map table names to Neo4j node labels
+        table_to_label = {
+            "nodes_CL": "KubeNode",
+            "services_CL": "Service",
+            "endpoints_CL": "Endpoint",
+            "deployments_CL": "Deployment",
+            "replicasets_CL": "ReplicaSet",
+            "statefulsets_CL": "StatefulSet",
+            "namespaces_CL": "Namespace",
+            "serviceaccounts_CL": "ServiceAccount",
+            "networkpolicies_CL": "NetworkPolicy",
+            "rbacbindings_CL": "RoleBinding"
+        }
         # Load last seen state for stateful resources
         if config_data is not None and "last_seen_state" in config_data:
             last_seen_state = config_data["last_seen_state"]
@@ -135,8 +148,10 @@ def main():
             if monitoring_enabled and table_name in ["kubelogs_CL", "kubeevents_CL"]:
                 continue  # Skip if monitoring is enabled
 
-            # Stateful resource diff logic
-            if table_name in stateful_resources:
+            label = table_to_label.get(table_name)
+
+            # Stateful resource diff logic (only for Neo4j-mapped tables)
+            if label and table_name in stateful_resources:
                 current_items = list(fetch_function())
                 def get_key(item):
                     if table_name == "namespaces_CL":
@@ -162,12 +177,12 @@ def main():
 
                 # Update graph for additions
                 for item in additions:
-                    graph_builder.upsert_node(table_name.replace('_CL',''), item)
+                    graph_builder.upsert_node(label, item)
 
                 # Update graph for deletions
                 for item in deletions:
                     key = get_key(item)
-                    graph_builder.delete_node(table_name.replace('_CL',''), key)
+                    graph_builder.delete_node(label, key)
 
                 # Send additions to Azure
                 if additions and dcr_mappings:
@@ -209,11 +224,35 @@ def main():
                     config_data["last_upload"][table_name] = now.isoformat()
                     updated = True
             else:
+                # For all tables (even those not mapped to Neo4j), upload to Azure
                 since_time = last_fetch_times[table_name]
                 data_items = list(fetch_function(since_time=since_time))
-                # Update graph for each item (add/update)
-                for item in data_items:
-                    graph_builder.upsert_node(table_name.replace('_CL',''), item)
+                # Special handling for kubeevents_CL: create/update Pod nodes for relevant events
+                if table_name == "kubeevents_CL":
+                    for event in data_items:
+                        reason = event.get("reason", "")
+                        pod_name = event.get("involved_object_name")
+                        pod_uid = event.get("involved_object_uid")
+                        namespace = event.get("namespace") or event.get("involved_object_namespace")
+                        if pod_name and namespace:
+                            pod_key = f"{namespace}:{pod_name}"
+                            if reason == "Killing":
+                                print(f"Deleting Pod node due to Killing event: {pod_key}")
+                                graph_builder.delete_node("Pod", pod_key, key_name="composite_key")
+                            elif reason in ["Started", "Created"]:
+                                print(f"Upserting Pod node: {pod_key}")
+                                pod_props = {
+                                    "name": pod_name,
+                                    "namespace": namespace,
+                                    "uid": pod_uid,
+                                    "phase": reason,
+                                    "lastSeen": event.get("TimeGenerated"),
+                                }
+                                graph_builder.upsert_node("Pod", pod_props)
+                else:
+                    # Update graph for each item (add/update)
+                    for item in data_items:
+                        graph_builder.upsert_node(label, item)
                 def data_gen():
                     for item in data_items:
                         yield item
