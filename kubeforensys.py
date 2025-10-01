@@ -165,7 +165,7 @@ def main():
                     elif table_name == "networkpolicies_CL":
                         return f"{item['namespace']}:{item['name']}"
                     else:
-                        return item.get("uid") or item.get("name")
+                        raise ValueError(f"Unexpected table for get_key: {table_name}")
 
                 current_state = {get_key(item): item for item in current_items}
                 prev_state = last_seen_state.get(table_name, {})
@@ -175,12 +175,47 @@ def main():
                 # Detect deletions
                 deletions = [item for k, item in prev_state.items() if k not in current_state]
 
-                # Update graph for additions
+                # Update graph for additions and create non-Pod edges
                 for item in additions:
                     graph_builder.upsert_node(label, item)
 
+                    # --- NON-POD EDGE LOGIC ---
+                    # IN_NAMESPACE: Service/RoleBinding → Namespace
+                    if label in ["Service", "RoleBinding"]:
+                        ns = item.get("namespace")
+                        if ns:
+                            from_key = graph_builder.get_composite_key(label, item)
+                            ns_key = ns
+                            graph_builder.upsert_edge(label, from_key, "Namespace", ns_key, "IN_NAMESPACE", {})
+
+                    # SELECTS: Service → Pod (if you have selector info)
+                    if label == "Service" and item.get("selector_pod_keys"):
+                        svc_key = graph_builder.get_composite_key("Service", item)
+                        for pod_key in item["selector_pod_keys"]:
+                            graph_builder.upsert_edge("Service", svc_key, "Pod", pod_key, "SELECTS")
+
+                    # ENDPOINT_OF: Endpoint → Pod (if you have endpoint info)
+                    if label == "Endpoint" and item.get("pod_keys"):
+                        ep_key = graph_builder.get_composite_key("Endpoint", item)
+                        for pod_key in item["pod_keys"]:
+                            graph_builder.upsert_edge("Endpoint", ep_key, "Pod", pod_key, "ENDPOINT_OF")
+
+                    # GRANTED: RoleBinding → Role
+                    if label == "RoleBinding" and item.get("role_ref_name") and item.get("role_ref_kind"):
+                        rb_key = graph_builder.get_composite_key("RoleBinding", item)
+                        role_label = item["role_ref_kind"]
+                        role_key = f"{item.get('namespace')}:{item['role_ref_name']}"
+                        graph_builder.upsert_edge("RoleBinding", rb_key, role_label, role_key, "GRANTED")
+
+                    # ALLOWED_BY: Pod → Pod/Namespace (from NetworkPolicy)
+                    if label == "NetworkPolicy" and item.get("allowed_pod_keys"):
+                        np_key = graph_builder.get_composite_key("NetworkPolicy", item)
+                        for pod_key in item["allowed_pod_keys"]:
+                            graph_builder.upsert_edge("Pod", pod_key, "NetworkPolicy", np_key, "ALLOWED_BY")
+
                 # Update graph for deletions
                 for item in deletions:
+                    print(f"Deleting {label} node: {item}")
                     key = get_key(item)
                     graph_builder.delete_node(label, key)
 
@@ -227,7 +262,7 @@ def main():
                 # For all tables (even those not mapped to Neo4j), upload to Azure
                 since_time = last_fetch_times[table_name]
                 data_items = list(fetch_function(since_time=since_time))
-                # Special handling for kubeevents_CL: create/update Pod nodes for relevant events
+                # Special handling for kubeevents_CL: create/update Pod nodes for relevant events and create Pod edges
                 if table_name == "kubeevents_CL":
                     for event in data_items:
                         reason = event.get("reason", "")
@@ -237,10 +272,8 @@ def main():
                         if pod_name and namespace:
                             pod_key = f"{namespace}:{pod_name}"
                             if reason == "Killing":
-                                print(f"Deleting Pod node due to Killing event: {pod_key}")
-                                graph_builder.delete_node("Pod", pod_key, key_name="composite_key")
+                                graph_builder.delete_node("Pod", pod_key)
                             elif reason in ["Started", "Created"]:
-                                print(f"Upserting Pod node: {pod_key}")
                                 pod_props = {
                                     "name": pod_name,
                                     "namespace": namespace,
@@ -249,10 +282,39 @@ def main():
                                     "lastSeen": event.get("TimeGenerated"),
                                 }
                                 graph_builder.upsert_node("Pod", pod_props)
+
+                                # --- POD EDGE LOGIC ---
+                                # RUNS_ON: Pod → KubeNode (if info available in event)
+                                node_name = event.get("nodeName")
+                                if node_name:
+                                    pod_composite_key = f"{namespace}:{pod_name}"
+                                    graph_builder.upsert_edge("Pod", pod_composite_key, "KubeNode", node_name, "RUNS_ON")
+
+                                # IN_NAMESPACE: Pod → Namespace
+                                graph_builder.upsert_edge("Pod", pod_key, "Namespace", namespace, "IN_NAMESPACE", {})
+
+                                # PART_OF: Pod → Deployment/ReplicaSet (ownerRef info if available)
+                                owner_refs = event.get("ownerReferences")
+                                if owner_refs:
+                                    for owner in owner_refs:
+                                        kind = owner.get("kind")
+                                        owner_name = owner.get("name")
+                                        owner_ns = namespace
+                                        if kind in ["Deployment", "ReplicaSet"] and owner_name and owner_ns:
+                                            owner_label = kind
+                                            owner_key = f"{owner_ns}:{owner_name}"
+                                            graph_builder.upsert_edge("Pod", pod_key, owner_label, owner_key, "PART_OF")
+
+                                # AUTHENTICATED_AS: Pod → ServiceAccount (if info available)
+                                sa_name = event.get("service_account_name")
+                                if sa_name:
+                                    sa_key = f"{namespace}:{sa_name}"
+                                    graph_builder.upsert_edge("Pod", pod_key, "ServiceAccount", sa_key, "AUTHENTICATED_AS")
                 else:
                     # Update graph for each item (add/update)
                     for item in data_items:
                         graph_builder.upsert_node(label, item)
+
                 def data_gen():
                     for item in data_items:
                         yield item

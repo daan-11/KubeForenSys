@@ -16,7 +16,7 @@ az aks wait -g $RESOURCE_GROUP -n $AKS_CLUSTER --created
 
 echo "Deploying Neo4j VM..."
 bash deploy_neo4j_vm.sh
-
+cd ..
 echo "Activating virtual environment..."
 source "$VENV_PATH/bin/activate"
 

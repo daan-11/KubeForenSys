@@ -79,18 +79,44 @@ class Neo4jGraphBuilder:
         with self.driver.session() as session:
             session.run(query, **safe_props)
 
-    def delete_node(self, label, key, key_name="uid"):
+    def delete_node(self, label, key, key_name="composite_key"):
         query = f"MATCH (n:{label} {{{key_name}: $key}}) DETACH DELETE n"
+        print(f"Executing delete query: {query} with key={key}")
         with self.driver.session() as session:
             session.run(query, key=key)
 
-    def upsert_edge(self, from_label, from_key, to_label, to_key, rel_type, properties, from_key_name="uid", to_key_name="uid"):
+    def upsert_edge(self, from_label, from_key, to_label, to_key, rel_type, properties=None, from_key_name="composite_key", to_key_name="composite_key"):
+        print(f"Upserting edge {from_label}({from_key}) -[{rel_type}]-> {to_label}({to_key})")
+        if properties is None:
+            properties = {}
         prop_keys = ", ".join([f"r.{k} = ${k}" for k in properties.keys()])
+        set_clause = f"SET {prop_keys}" if prop_keys else ""
         query = (
             f"MATCH (a:{from_label} {{{from_key_name}: $from_key}}), (b:{to_label} {{{to_key_name}: $to_key}}) "
             f"MERGE (a)-[r:{rel_type}]->(b) "
-            f"SET {prop_keys} "
+            f"{set_clause}"
         )
         params = {"from_key": from_key, "to_key": to_key, **properties}
         with self.driver.session() as session:
             session.run(query, **params)
+
+    # Helper for composite keys
+    def get_composite_key(self, label, properties):
+        composite_key_labels = {
+            "ServiceAccount": ("namespace", "name"),
+            "Service": ("namespace", "name"),
+            "Endpoint": ("namespace", "name"),
+            "Namespace": ("name",),
+            "NetworkPolicy": ("namespace", "name"),
+            "RoleBinding": ("namespace", "binding_name"),
+            "ReplicaSet": ("namespace", "name"),
+            "Deployment": ("namespace", "name"),
+            "StatefulSet": ("namespace", "name"),
+            "Pod": ("namespace", "name")
+        }
+        if label in composite_key_labels:
+            try:
+                return ':'.join([str(properties[k]) for k in composite_key_labels[label]])
+            except Exception:
+                return None
+        return properties.get("uid")
