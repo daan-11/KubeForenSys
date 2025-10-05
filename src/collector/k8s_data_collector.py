@@ -27,6 +27,13 @@ class KubeLogFetcher:
         self.logger.info("Retrieving service info for topology/graph analysis")
         for svc in self.v1.list_service_for_all_namespaces().items:
             svc_uid = svc.metadata.uid
+            selector_pod_keys = []
+            # Try to resolve pods selected by this service
+            if svc.spec.selector:
+                label_selector = ','.join([f"{k}={v}" for k, v in svc.spec.selector.items()])
+                pods = self.v1.list_namespaced_pod(namespace=svc.metadata.namespace, label_selector=label_selector).items
+                for pod in pods:
+                    selector_pod_keys.append(f"{pod.metadata.namespace}:{pod.metadata.name}")
             svc_info = {
                 "TimeGenerated": self.format_timestamp(svc.metadata.creation_timestamp),
                 "uid": svc_uid,
@@ -34,7 +41,8 @@ class KubeLogFetcher:
                 "namespace": svc.metadata.namespace,
                 "labels": svc.metadata.labels,
                 "annotations": svc.metadata.annotations,
-                "deleted": False
+                "deleted": False,
+                "selector_pod_keys": selector_pod_keys
             }
             yield svc_info
 
@@ -44,6 +52,12 @@ class KubeLogFetcher:
             if since_time and ep.metadata.creation_timestamp and ep.metadata.creation_timestamp <= since_time:
                 continue
             ep_uid = ep.metadata.uid
+            pod_keys = []
+            # Try to resolve pods for this endpoint
+            for subset in ep.subsets or []:
+                for addr in subset.addresses or []:
+                    if addr.target_ref and addr.target_ref.kind == "Pod":
+                        pod_keys.append(f"{ep.metadata.namespace}:{addr.target_ref.name}")
             ep_info = {
                 "TimeGenerated": self.format_timestamp(ep.metadata.creation_timestamp),
                 "uid": ep_uid,
@@ -51,7 +65,8 @@ class KubeLogFetcher:
                 "namespace": ep.metadata.namespace,
                 "labels": ep.metadata.labels,
                 "annotations": ep.metadata.annotations,
-                "subsets": [s.to_dict() for s in (ep.subsets or [])]
+                "subsets": [s.to_dict() for s in (ep.subsets or [])],
+                "pod_keys": pod_keys
             }
             yield ep_info
 
@@ -131,7 +146,7 @@ class KubeLogFetcher:
             self.logger.error(f"Failed to load kubeconfig: {e}")
             raise
         self.v1 = client.CoreV1Api()
-        self.since_seconds = user_settings.get("since_seconds", 86400)
+        self.since_seconds = user_settings.get("since_seconds", 2147483647)  # Default to max int if not set
         self.namespaces_to_skip = ["kube-system", "azure-arc", "gatekeeper-system"]
         self.pod_batch_size = 500
         self.rbac_v1 = client.RbacAuthorizationV1Api()
@@ -163,6 +178,9 @@ class KubeLogFetcher:
                 if not pod.status.container_statuses:
                     self.logger.info("No container status")
                     continue
+
+                # Try to get service account name
+                service_account_name = pod.spec.service_account_name if hasattr(pod.spec, "service_account_name") else None
 
                 for container_status in pod.status.container_statuses:
                     container_name = container_status.name
@@ -214,7 +232,8 @@ class KubeLogFetcher:
                                     "annotations": pod.metadata.annotations,
                                     "ownerReferences": [ref.to_dict() for ref in (pod.metadata.owner_references or [])],
                                     "nodeName": pod.spec.node_name,
-                                    "podIP": pod.status.pod_ip
+                                    "podIP": pod.status.pod_ip,
+                                    "service_account_name": service_account_name
                                 }
 
                         except ApiException as e:
@@ -457,10 +476,21 @@ class KubeLogFetcher:
         self.logger.info("Retrieving Network Policies")
         for np in self.networking_v1.list_network_policy_for_all_namespaces().items:
             creation_timestamp = self.format_timestamp(np.metadata.creation_timestamp)
+            allowed_pod_keys = []
+            # Try to resolve allowed pods from ingress/egress rules
+            if hasattr(np, "spec") and np.spec and np.spec.ingress:
+                for ingress in np.spec.ingress:
+                    for peer in getattr(ingress, "from", []) or []:
+                        if getattr(peer, "pod_selector", None):
+                            label_selector = ','.join([f"{k}={v}" for k, v in peer.pod_selector.match_labels.items()])
+                            pods = self.v1.list_namespaced_pod(namespace=np.metadata.namespace, label_selector=label_selector).items
+                            for pod in pods:
+                                allowed_pod_keys.append(f"{pod.metadata.namespace}:{pod.metadata.name}")
             yield {
                 "TimeGenerated": creation_timestamp,
                 "namespace": np.metadata.namespace,
                 "name": np.metadata.name,
                 "rules": np.spec.to_dict() if hasattr(np, "spec") and np.spec else None,
-                "deleted": False
+                "deleted": False,
+                "allowed_pod_keys": allowed_pod_keys
             }

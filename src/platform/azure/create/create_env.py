@@ -205,7 +205,8 @@ class AzureLogPipelineProvisioner:
                         {"name": "namespace", "type": "String"},
                         {"name": "labels", "type": "String"},
                         {"name": "annotations", "type": "String"},
-                        {"name": "deleted", "type": "Boolean"}
+                        {"name": "deleted", "type": "Boolean"},
+                        {"name": "selector_pod_keys", "type": "String"}
                     ]
                 },
                 {
@@ -217,7 +218,8 @@ class AzureLogPipelineProvisioner:
                         {"name": "namespace", "type": "String"},
                         {"name": "labels", "type": "String"},
                         {"name": "annotations", "type": "String"},
-                        {"name": "subsets", "type": "String"}
+                        {"name": "subsets", "type": "String"},
+                        {"name": "pod_keys", "type": "String"}
                     ]
                 },
                 {
@@ -280,6 +282,7 @@ class AzureLogPipelineProvisioner:
                         {"name": "ownerReferences", "type": "String"},
                         {"name": "nodeName", "type": "String"},
                         {"name": "podIP", "type": "String"},
+                        {"name": "service_account_name", "type": "String"}
                     ]
                 },
                 {
@@ -366,7 +369,8 @@ class AzureLogPipelineProvisioner:
                         {"name": "namespace", "type": "String"},
                         {"name": "name", "type": "String"},
                         {"name": "rules", "type": "String"},
-                        {"name": "deleted", "type": "Boolean"}
+                        {"name": "deleted", "type": "Boolean"},
+                        {"name": "allowed_pod_keys", "type": "String"}
                     ]
                 }
             ]

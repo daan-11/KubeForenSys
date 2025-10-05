@@ -86,13 +86,13 @@ class Neo4jGraphBuilder:
             session.run(query, key=key)
 
     def upsert_edge(self, from_label, from_key, to_label, to_key, rel_type, properties=None, from_key_name="composite_key", to_key_name="composite_key"):
-        print(f"Upserting edge {from_label}({from_key}) -[{rel_type}]-> {to_label}({to_key})")
         if properties is None:
             properties = {}
         prop_keys = ", ".join([f"r.{k} = ${k}" for k in properties.keys()])
         set_clause = f"SET {prop_keys}" if prop_keys else ""
         query = (
-            f"MATCH (a:{from_label} {{{from_key_name}: $from_key}}), (b:{to_label} {{{to_key_name}: $to_key}}) "
+            f"MATCH (a:{from_label} {{{from_key_name}: $from_key}}) "
+            f"MATCH (b:{to_label} {{{to_key_name}: $to_key}}) "
             f"MERGE (a)-[r:{rel_type}]->(b) "
             f"{set_clause}"
         )
