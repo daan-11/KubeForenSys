@@ -4,6 +4,91 @@ import logging
 import os
 
 class Neo4jGraphBuilder:
+    def list_nodes(self, label):
+        """
+        Return a set of composite keys for all nodes of a given label.
+        """
+        composite_key_labels = {
+            "ServiceAccount": ("namespace", "name"),
+            "Service": ("namespace", "name"),
+            "Endpoint": ("namespace", "name"),
+            "Namespace": ("name",),
+            "NetworkPolicy": ("namespace", "name"),
+            "RoleBinding": ("namespace", "binding_name"),
+            "ReplicaSet": ("namespace", "name"),
+            "Deployment": ("namespace", "name"),
+            "StatefulSet": ("namespace", "name"),
+            "Pod": ("namespace", "name")
+        }
+        allowed_labels = {
+            "KubeNode": "uid",
+            "Service": None,
+            "Endpoint": None,
+            "Deployment": None,
+            "ReplicaSet": None,
+            "StatefulSet": None,
+            "Namespace": None,
+            "ServiceAccount": None,
+            "NetworkPolicy": None,
+            "RoleBinding": None,
+            "Pod": None
+        }
+        key_field = None
+        if label in composite_key_labels:
+            print(f"Label {label} uses composite key")
+            key_field = 'composite_key'
+        elif label in allowed_labels:
+            print(f"Label {label} uses single key field: {allowed_labels[label]}")
+            key_field = allowed_labels[label]
+        else:
+            return set()
+        query = f"MATCH (n:{label}) RETURN n.{key_field} as key"
+        with self.driver.session() as session:
+            result = session.run(query).data()
+            return set([str(record["key"]) for record in result if record.get("key")])
+
+    def list_edges(self, from_label, rel_type, to_label):
+        """
+        Return a set of (from_key, to_key) for all edges of a given type.
+        """
+        query = (
+            f"MATCH (a:{from_label})-[r:{rel_type}]->(b:{to_label}) "
+            f"RETURN a.composite_key as from_key, b.composite_key as to_key"
+        )
+        with self.driver.session() as session:
+            result = session.run(query)
+            return set([(record["from_key"], record["to_key"]) for record in result if record["from_key"] and record["to_key"]])
+
+    def delete_nodes_and_edges_not_in(self, label, current_keys, edge_types=None):
+        """
+        Delete all nodes of a given label and their edges not present in current_keys.
+        edge_types: list of (from_label, rel_type, to_label) to check for edge deletion.
+        """
+        existing_keys = self.list_nodes(label)
+        print(f"Existing keys for label {label}: {existing_keys}")
+        print(f"Current keys for label {label}: {current_keys}")
+        to_delete = existing_keys - set(current_keys)
+        print(f"Nodes to delete for label {label}: {to_delete}")
+        for key in to_delete:
+            self.logger.info(f"Deleting obsolete {label} node: {key}")
+            self.delete_node(label, key, key_name="composite_key")
+        # Delete edges for these nodes
+        if edge_types:
+            for from_label, rel_type, to_label in edge_types:
+                existing_edges = self.list_edges(from_label, rel_type, to_label)
+                for from_key, to_key in existing_edges:
+                    if (from_label == label and from_key in to_delete) or (to_label == label and to_key in to_delete):
+                        self.logger.info(f"Deleting obsolete edge: ({from_label}:{from_key})-[:{rel_type}]->({to_label}:{to_key})")
+                        self.delete_edge(from_label, from_key, rel_type, to_label, to_key)
+
+    def delete_edge(self, from_label, from_key, rel_type, to_label, to_key, from_key_name="composite_key", to_key_name="composite_key"):
+        query = (
+            f"MATCH (a:{from_label} {{{from_key_name}: $from_key}})-[r:{rel_type}]->(b:{to_label} {{{to_key_name}: $to_key}}) "
+            f"DELETE r"
+        )
+        with self.driver.session() as session:
+            session.run(query, from_key=from_key, to_key=to_key)
+
     def __init__(self, credentials_path="/home/derksen/Documents/KubeForenSys/neo4j-credentials.json"):
         with open(credentials_path, "r") as f:
             creds = json.load(f)

@@ -30,8 +30,6 @@ def main():
     resource_group = os.getenv("RESOURCE_GROUP_NAME")
     cluster_name = os.getenv("CLUSTER_NAME")
 
-
-
     import json
     CONFIG_PATH = "cluster_state.json"
     dcr_mappings = None
@@ -92,32 +90,23 @@ def main():
                 except Exception:
                     last_fetch_times[k] = None
 
-    # Data sources for stateful resources
-    stateful_resources = {
-        "namespaces_CL": fetcher.get_namespaces,
-        "services_CL": fetcher.get_services,
-        "serviceaccounts_CL": fetcher.get_service_accounts,
-        "rbacbindings_CL": fetcher.get_rbac_bindings,
-        "networkpolicies_CL": fetcher.get_network_policies
-    }
-
-    # All data sources
+    # Ensure pods are collected and upserted before any resource that references them
     data_sources = {
         "nodes_CL": fetcher.get_nodes,
+        "namespaces_CL": fetcher.get_namespaces,
+        "kubelogs_CL": fetcher.retrieve_logs_from_pods,  # Pods first
         "services_CL": fetcher.get_services,
         "endpoints_CL": fetcher.get_endpoints,
+        "networkpolicies_CL": fetcher.get_network_policies,
         "deployments_CL": fetcher.get_deployments,
         "replicasets_CL": fetcher.get_replicasets,
         "statefulsets_CL": fetcher.get_statefulsets,
-        "namespaces_CL": fetcher.get_namespaces,
-        "kubelogs_CL": fetcher.retrieve_logs_from_pods,
         "kubeevents_CL": fetcher.retrieve_events,
         "commandhistory_CL": fetcher.retrieve_command_history,
         "serviceaccounts_CL": fetcher.get_service_accounts,
         "suspiciouspods_CL": fetcher.get_suspicious_pods,
         "rbacbindings_CL": fetcher.get_rbac_bindings,
-        "cronjobs_CL": fetcher.get_cronjob_containers_info,
-        "networkpolicies_CL": fetcher.get_network_policies
+        "cronjobs_CL": fetcher.get_cronjob_containers_info
     }
 
     aks_addon_lister = AksAddonLister(subscription_id, resource_group)
@@ -125,212 +114,31 @@ def main():
 
     def run_collection():
         updated = False
-        # Map table names to Neo4j node labels
-        table_to_label = {
-            "nodes_CL": "KubeNode",
-            "services_CL": "Service",
-            "endpoints_CL": "Endpoint",
-            "deployments_CL": "Deployment",
-            "replicasets_CL": "ReplicaSet",
-            "statefulsets_CL": "StatefulSet",
-            "namespaces_CL": "Namespace",
-            "serviceaccounts_CL": "ServiceAccount",
-            "networkpolicies_CL": "NetworkPolicy",
-            "rbacbindings_CL": "RoleBinding"
-        }
-        # Load last seen state for stateful resources
-        if config_data is not None and "last_seen_state" in config_data:
-            last_seen_state = config_data["last_seen_state"]
-        else:
-            last_seen_state = {}
 
         for table_name, fetch_function in data_sources.items():
             if monitoring_enabled and table_name in ["kubelogs_CL", "kubeevents_CL"]:
                 continue  # Skip if monitoring is enabled
 
-            label = table_to_label.get(table_name)
+            since_time = last_fetch_times[table_name]
+            # Pass graph_builder to all collectors
+            data_items = list(fetch_function(graph_builder=graph_builder, since_time=since_time))
 
-            # Stateful resource diff logic (only for Neo4j-mapped tables)
-            if label and table_name in stateful_resources:
-                current_items = list(fetch_function())
-                def get_key(item):
-                    if table_name == "namespaces_CL":
-                        return item["name"]
-                    elif table_name == "services_CL":
-                        return f"{item['namespace']}:{item['name']}"
-                    elif table_name == "serviceaccounts_CL":
-                        return f"{item['namespace']}:{item['name']}"
-                    elif table_name == "rbacbindings_CL":
-                        return f"{item['namespace']}:{item['binding_name']}"
-                    elif table_name == "networkpolicies_CL":
-                        return f"{item['namespace']}:{item['name']}"
-                    else:
-                        raise ValueError(f"Unexpected table for get_key: {table_name}")
-
-                current_state = {get_key(item): item for item in current_items}
-                prev_state = last_seen_state.get(table_name, {})
-
-                # Detect additions
-                additions = [item for k, item in current_state.items() if k not in prev_state]
-                # Detect deletions
-                deletions = [item for k, item in prev_state.items() if k not in current_state]
-
-                # Update graph for additions and create non-Pod edges
-                for item in additions:
-                    graph_builder.upsert_node(label, item)
-
-                    # --- NON-POD EDGE LOGIC ---
-                    # IN_NAMESPACE: Service/RoleBinding → Namespace
-                    if label in ["Service", "RoleBinding"]:
-                        ns = item.get("namespace")
-                        if ns:
-                            from_key = graph_builder.get_composite_key(label, item)
-                            ns_key = ns
-                            graph_builder.upsert_edge(label, from_key, "Namespace", ns_key, "IN_NAMESPACE", {})
-
-                    # SELECTS: Service → Pod (if you have selector info)
-                    if label == "Service" and item.get("selector_pod_keys"):
-                        svc_key = graph_builder.get_composite_key("Service", item)
-                        for pod_key in item["selector_pod_keys"]:
-                            graph_builder.upsert_edge("Service", svc_key, "Pod", pod_key, "SELECTS")
-
-                    # ENDPOINT_OF: Endpoint → Pod (if you have endpoint info)
-                    if label == "Endpoint" and item.get("pod_keys"):
-                        ep_key = graph_builder.get_composite_key("Endpoint", item)
-                        for pod_key in item["pod_keys"]:
-                            graph_builder.upsert_edge("Endpoint", ep_key, "Pod", pod_key, "ENDPOINT_OF")
-
-                    # GRANTED: RoleBinding → Role
-                    if label == "RoleBinding" and item.get("role_ref_name") and item.get("role_ref_kind"):
-                        rb_key = graph_builder.get_composite_key("RoleBinding", item)
-                        role_label = item["role_ref_kind"]
-                        role_key = f"{item.get('namespace')}:{item['role_ref_name']}"
-                        graph_builder.upsert_edge("RoleBinding", rb_key, role_label, role_key, "GRANTED")
-
-                    # ALLOWED_BY: Pod → Pod/Namespace (from NetworkPolicy)
-                    if label == "NetworkPolicy" and item.get("allowed_pod_keys"):
-                        np_key = graph_builder.get_composite_key("NetworkPolicy", item)
-                        for pod_key in item["allowed_pod_keys"]:
-                            graph_builder.upsert_edge("Pod", pod_key, "NetworkPolicy", np_key, "ALLOWED_BY")
-
-                # Update graph for deletions
-                for item in deletions:
-                    print(f"Deleting {label} node: {item}")
-                    key = get_key(item)
-                    graph_builder.delete_node(label, key)
-
-                # Send additions to Azure
-                if additions and dcr_mappings:
-                    def add_gen():
-                        for item in additions:
-                            yield item
-                    connector.upload_in_batches(
-                        generator_function=add_gen,
-                        stream_name=f"Custom-{table_name}",
-                        dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
-                    )
-
-                # Send deletions as custom log entries
-                if deletions and dcr_mappings:
-                    def del_gen():
-                        for item in deletions:
-                            del_log = dict(item)
-                            del_log["TimeGenerated"] = datetime.now(timezone.utc).isoformat()
-                            del_log["deleted"] = True
-                            yield del_log
-                    connector.upload_in_batches(
-                        generator_function=del_gen,
-                        stream_name=f"Custom-{table_name}",
-                        dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
-                    )
-
-                # Update last seen state
-                last_seen_state[table_name] = current_state
-                if config_data is not None:
-                    config_data["last_seen_state"] = last_seen_state
-                    updated = True
-
-                # Always update last_upload time for this table
-                now = datetime.now(timezone.utc)
-                last_fetch_times[table_name] = now
-                if config_data is not None:
-                    if "last_upload" not in config_data:
-                        config_data["last_upload"] = {}
-                    config_data["last_upload"][table_name] = now.isoformat()
-                    updated = True
-            else:
-                # For all tables (even those not mapped to Neo4j), upload to Azure
-                since_time = last_fetch_times[table_name]
-                data_items = list(fetch_function(since_time=since_time))
-                # Special handling for kubeevents_CL: create/update Pod nodes for relevant events and create Pod edges
-                if table_name == "kubeevents_CL":
-                    for event in data_items:
-                        reason = event.get("reason", "")
-                        pod_name = event.get("involved_object_name")
-                        pod_uid = event.get("involved_object_uid")
-                        namespace = event.get("namespace") or event.get("involved_object_namespace")
-                        if pod_name and namespace:
-                            pod_key = f"{namespace}:{pod_name}"
-                            if reason == "Killing":
-                                graph_builder.delete_node("Pod", pod_key)
-                            elif reason in ["Started", "Created"]:
-                                pod_props = {
-                                    "name": pod_name,
-                                    "namespace": namespace,
-                                    "uid": pod_uid,
-                                    "phase": reason,
-                                    "lastSeen": event.get("TimeGenerated"),
-                                }
-                                graph_builder.upsert_node("Pod", pod_props)
-
-                                # --- POD EDGE LOGIC ---
-                                # RUNS_ON: Pod → KubeNode (if info available in event)
-                                node_name = event.get("nodeName")
-                                if node_name:
-                                    pod_composite_key = f"{namespace}:{pod_name}"
-                                    graph_builder.upsert_edge("Pod", pod_composite_key, "KubeNode", node_name, "RUNS_ON")
-
-                                # IN_NAMESPACE: Pod → Namespace
-                                graph_builder.upsert_edge("Pod", pod_key, "Namespace", namespace, "IN_NAMESPACE", {})
-
-                                # PART_OF: Pod → Deployment/ReplicaSet (ownerRef info if available)
-                                owner_refs = event.get("ownerReferences")
-                                if owner_refs:
-                                    for owner in owner_refs:
-                                        kind = owner.get("kind")
-                                        owner_name = owner.get("name")
-                                        owner_ns = namespace
-                                        if kind in ["Deployment", "ReplicaSet"] and owner_name and owner_ns:
-                                            owner_label = kind
-                                            owner_key = f"{owner_ns}:{owner_name}"
-                                            graph_builder.upsert_edge("Pod", pod_key, owner_label, owner_key, "PART_OF")
-
-                                # AUTHENTICATED_AS: Pod → ServiceAccount (if info available)
-                                sa_name = event.get("service_account_name")
-                                if sa_name:
-                                    sa_key = f"{namespace}:{sa_name}"
-                                    graph_builder.upsert_edge("Pod", pod_key, "ServiceAccount", sa_key, "AUTHENTICATED_AS")
-                else:
-                    # Update graph for each item (add/update)
-                    for item in data_items:
-                        graph_builder.upsert_node(label, item)
-
-                def data_gen():
-                    for item in data_items:
-                        yield item
-                if dcr_mappings:
-                    connector.upload_in_batches(
-                        generator_function=data_gen,
-                        stream_name=f"Custom-{table_name}",
-                        dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
-                    )
-                now = datetime.now(timezone.utc)
-                last_fetch_times[table_name] = now
-                if config_data is not None:
-                    if "last_upload" not in config_data:
-                        config_data["last_upload"] = {}
-                    config_data["last_upload"][table_name] = now.isoformat()
-                    updated = True
+            def data_gen():
+                for item in data_items:
+                    yield item
+            if dcr_mappings:
+                connector.upload_in_batches(
+                    generator_function=data_gen,
+                    stream_name=f"Custom-{table_name}",
+                    dcr_stream_id=dcr_mappings[table_name]["dcr_id"]
+                )
+            now = datetime.now(timezone.utc)
+            last_fetch_times[table_name] = now
+            if config_data is not None:
+                if "last_upload" not in config_data:
+                    config_data["last_upload"] = {}
+                config_data["last_upload"][table_name] = now.isoformat()
+                updated = True
 
         # Save updated last_upload times and last_seen_state to config file
         if updated:
