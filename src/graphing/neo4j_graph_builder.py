@@ -15,13 +15,16 @@ class Neo4jGraphBuilder:
             "Namespace": ("name",),
             "NetworkPolicy": ("namespace", "name"),
             "RoleBinding": ("namespace", "binding_name"),
+            "ClusterRoleBinding": ("binding_name",),
             "ReplicaSet": ("namespace", "name"),
             "Deployment": ("namespace", "name"),
             "StatefulSet": ("namespace", "name"),
-            "Pod": ("namespace", "name")
+            "Pod": ("namespace", "name"),
+            "Role": ("namespace", "name"),
+            "ClusterRole": ("name",)
         }
         allowed_labels = {
-            "KubeNode": "uid",
+            "KubeNode": "name",
             "Service": None,
             "Endpoint": None,
             "Deployment": None,
@@ -31,14 +34,15 @@ class Neo4jGraphBuilder:
             "ServiceAccount": None,
             "NetworkPolicy": None,
             "RoleBinding": None,
-            "Pod": None
+            "ClusterRoleBinding": None,
+            "Pod": None,
+            "Role": None,
+            "ClusterRole": None
         }
         key_field = None
         if label in composite_key_labels:
-            print(f"Label {label} uses composite key")
             key_field = 'composite_key'
         elif label in allowed_labels:
-            print(f"Label {label} uses single key field: {allowed_labels[label]}")
             key_field = allowed_labels[label]
         else:
             return set()
@@ -59,19 +63,16 @@ class Neo4jGraphBuilder:
             result = session.run(query)
             return set([(record["from_key"], record["to_key"]) for record in result if record["from_key"] and record["to_key"]])
 
-    def delete_nodes_and_edges_not_in(self, label, current_keys, edge_types=None):
+    def delete_nodes_and_edges_not_in(self, label, current_keys, edge_types=None, key_name="composite_key"):
         """
         Delete all nodes of a given label and their edges not present in current_keys.
         edge_types: list of (from_label, rel_type, to_label) to check for edge deletion.
         """
         existing_keys = self.list_nodes(label)
-        print(f"Existing keys for label {label}: {existing_keys}")
-        print(f"Current keys for label {label}: {current_keys}")
         to_delete = existing_keys - set(current_keys)
-        print(f"Nodes to delete for label {label}: {to_delete}")
         for key in to_delete:
             self.logger.info(f"Deleting obsolete {label} node: {key}")
-            self.delete_node(label, key, key_name="composite_key")
+            self.delete_node(label, key, key_name=key_name)
         # Delete edges for these nodes
         if edge_types:
             for from_label, rel_type, to_label in edge_types:
@@ -113,10 +114,13 @@ class Neo4jGraphBuilder:
             "Namespace": ("name",),
             "NetworkPolicy": ("namespace", "name"),
             "RoleBinding": ("namespace", "binding_name"),
+            "ClusterRoleBinding": ("binding_name",),
             "ReplicaSet": ("namespace", "name"),
             "Deployment": ("namespace", "name"),
             "StatefulSet": ("namespace", "name"),
-            "Pod": ("namespace", "name")
+            "Pod": ("namespace", "name"),
+            "Role": ("namespace", "name"),
+            "ClusterRole": ("name",)
         }
         allowed_labels = {
             "KubeNode": "uid",
@@ -129,7 +133,10 @@ class Neo4jGraphBuilder:
             "ServiceAccount": None,
             "NetworkPolicy": None,
             "RoleBinding": None,
-            "Pod": None
+            "ClusterRoleBinding": None,
+            "Pod": None,
+            "Role": None,
+            "ClusterRole": None
         }
         if label not in allowed_labels:
             return  # Ignore all other types
@@ -137,7 +144,7 @@ class Neo4jGraphBuilder:
         if label in composite_key_labels:
             key_fields = composite_key_labels[label]
             try:
-                key = ':'.join([str(properties[k]) for k in key_fields])
+                key = ':'.join([str(properties[k]) for k in key_fields if properties.get(k) is not None])
                 key_field = 'composite_key'
             except Exception:
                 self.logger.warning(f"No composite key found for node {label}: {properties}")
@@ -166,7 +173,6 @@ class Neo4jGraphBuilder:
 
     def delete_node(self, label, key, key_name="composite_key"):
         query = f"MATCH (n:{label} {{{key_name}: $key}}) DETACH DELETE n"
-        print(f"Executing delete query: {query} with key={key}")
         with self.driver.session() as session:
             session.run(query, key=key)
 
@@ -194,14 +200,18 @@ class Neo4jGraphBuilder:
             "Namespace": ("name",),
             "NetworkPolicy": ("namespace", "name"),
             "RoleBinding": ("namespace", "binding_name"),
+            "ClusterRoleBinding": ("binding_name",),
             "ReplicaSet": ("namespace", "name"),
             "Deployment": ("namespace", "name"),
             "StatefulSet": ("namespace", "name"),
-            "Pod": ("namespace", "name")
+            "Pod": ("namespace", "name"),
+            "Role": ("namespace", "name"),
+            "ClusterRole": ("name",)
         }
         if label in composite_key_labels:
             try:
-                return ':'.join([str(properties[k]) for k in composite_key_labels[label]])
+                # Join only existing keys to avoid None
+                return ':'.join([str(properties[k]) for k in composite_key_labels[label] if properties.get(k) is not None])
             except Exception:
                 return None
         return properties.get("uid")

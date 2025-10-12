@@ -15,7 +15,7 @@ class KubeLogFetcher:
         current_keys = []
         for ns in self.v1.list_namespace().items:
             if ns.metadata.name in self.namespaces_to_skip:
-                continue
+                continue           
             ns_info = {
                 "TimeGenerated": self.format_timestamp(ns.metadata.creation_timestamp),
                 "name": ns.metadata.name,
@@ -28,6 +28,8 @@ class KubeLogFetcher:
                 graph_builder.upsert_node("Namespace", ns_info)
                 key = graph_builder.get_composite_key("Namespace", ns_info)
                 current_keys.append(key)
+            if since_time and ns.metadata.creation_timestamp and ns.metadata.creation_timestamp <= since_time:
+                continue
             yield ns_info
         if graph_builder:
             graph_builder.delete_nodes_and_edges_not_in("Namespace", current_keys)
@@ -38,7 +40,7 @@ class KubeLogFetcher:
         current_keys = []
         for svc in self.v1.list_service_for_all_namespaces().items:
             if svc.metadata.namespace in self.namespaces_to_skip:
-                continue
+                continue           
             svc_uid = svc.metadata.uid
             selector_pod_keys = []
             if svc.spec.selector:
@@ -61,27 +63,29 @@ class KubeLogFetcher:
                 key = graph_builder.get_composite_key("Service", svc_info)
                 current_keys.append(key)
                 ns = svc_info.get("namespace")
-                print(f"Selector pod keys for service {svc_info.get('name')} in namespace {ns}: {selector_pod_keys}")
                 if ns:
                     from_key = key
                     graph_builder.upsert_edge("Service", from_key, "Namespace", ns, "IN_NAMESPACE", {})
                 for pod_key in selector_pod_keys:
                     svc_key = key
-                    self.logger.info(f"Upserting SELECTS edge: Service key={svc_key} -> Pod key={pod_key}")
                     if not pod_key:
                         self.logger.warning(f"Pod key is empty for service {svc_info.get('name')}")
                     graph_builder.upsert_edge("Service", svc_key, "Pod", pod_key, "SELECTS")
+            if since_time and svc.metadata.creation_timestamp and svc.metadata.creation_timestamp <= since_time:
+                continue
             yield svc_info
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("Service", current_keys, edge_types=[("Service", "IN_NAMESPACE", "Namespace"), ("Service", "SELECTS", "Pod")])
+            edge_types = [
+                ("Service", "IN_NAMESPACE", "Namespace"),
+                ("Service", "SELECTS", "Pod")
+            ]
+            graph_builder.delete_nodes_and_edges_not_in("Service", current_keys, edge_types=edge_types)
 
     def get_endpoints(self, graph_builder=None, last_endpoint_states=None, since_time=None):
         self.logger.info("Retrieving endpoint info for topology/graph analysis")
         current_keys = []
         for ep in self.v1.list_endpoints_for_all_namespaces().items:
             if ep.metadata.namespace in self.namespaces_to_skip:
-                continue
-            if since_time and ep.metadata.creation_timestamp and ep.metadata.creation_timestamp <= since_time:
                 continue
             ep_uid = ep.metadata.uid
             pod_keys = []
@@ -105,11 +109,14 @@ class KubeLogFetcher:
                 current_keys.append(key)
                 for pod_key in pod_keys:
                     ep_key = key
-                    self.logger.info(f"Upserting ENDPOINT_OF edge: Endpoint {ep_key} -> Pod {pod_key}")
                     graph_builder.upsert_edge("Endpoint", ep_key, "Pod", pod_key, "ENDPOINT_OF")
+            if since_time and ep.metadata.creation_timestamp and ep.metadata.creation_timestamp <= since_time:
+                self.logger.warning(f"Since_time is {since_time}, skipping endpoint {ep.metadata.name}, created at {ep.metadata.creation_timestamp}")
+                continue
             yield ep_info
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("Endpoint", current_keys, edge_types=[("Endpoint", "ENDPOINT_OF", "Pod")])
+            edge_types = [("Endpoint", "ENDPOINT_OF", "Pod")]
+            graph_builder.delete_nodes_and_edges_not_in("Endpoint", current_keys, edge_types=edge_types)
 
     def get_deployments(self, graph_builder=None, last_deploy_states=None, since_time=None):
         self.logger.info("Retrieving deployment info for topology/graph analysis")
@@ -117,8 +124,6 @@ class KubeLogFetcher:
         current_keys = []
         for dep in apps_v1.list_deployment_for_all_namespaces().items:
             if dep.metadata.namespace in self.namespaces_to_skip:
-                continue
-            if since_time and dep.metadata.creation_timestamp and dep.metadata.creation_timestamp <= since_time:
                 continue
             dep_uid = dep.metadata.uid
             dep_info = {
@@ -133,6 +138,8 @@ class KubeLogFetcher:
                 graph_builder.upsert_node("Deployment", dep_info)
                 key = graph_builder.get_composite_key("Deployment", dep_info)
                 current_keys.append(key)
+            if since_time and dep.metadata.creation_timestamp and dep.metadata.creation_timestamp <= since_time:
+                continue
             yield dep_info
         if graph_builder:
             graph_builder.delete_nodes_and_edges_not_in("Deployment", current_keys)
@@ -143,8 +150,6 @@ class KubeLogFetcher:
         current_keys = []
         for rs in apps_v1.list_replica_set_for_all_namespaces().items:
             if rs.metadata.namespace in self.namespaces_to_skip:
-                continue
-            if since_time and rs.metadata.creation_timestamp and rs.metadata.creation_timestamp <= since_time:
                 continue
             rs_uid = rs.metadata.uid
             rs_info = {
@@ -159,9 +164,21 @@ class KubeLogFetcher:
                 graph_builder.upsert_node("ReplicaSet", rs_info)
                 key = graph_builder.get_composite_key("ReplicaSet", rs_info)
                 current_keys.append(key)
+                # Add OWNS edge for all owner kinds
+                if rs.metadata.owner_references:
+                    for owner in rs.metadata.owner_references:
+                        owner_info = {
+                            "name": owner.name,
+                            "namespace": rs.metadata.namespace
+                        }
+                        owner_key = graph_builder.get_composite_key(owner.kind, owner_info)
+                        graph_builder.upsert_edge(owner.kind, owner_key, "ReplicaSet", key, "OWNS")
+            if since_time and rs.metadata.creation_timestamp and rs.metadata.creation_timestamp <= since_time:
+                continue
             yield rs_info
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("ReplicaSet", current_keys)
+            edge_types = [("Deployment", "OWNS", "ReplicaSet")]
+            graph_builder.delete_nodes_and_edges_not_in("ReplicaSet", current_keys, edge_types=edge_types)
 
     def get_statefulsets(self, graph_builder=None, last_ss_states=None, since_time=None):
         self.logger.info("Retrieving statefulset info for topology/graph analysis")
@@ -169,8 +186,6 @@ class KubeLogFetcher:
         current_keys = []
         for ss in apps_v1.list_stateful_set_for_all_namespaces().items:
             if ss.metadata.namespace in self.namespaces_to_skip:
-                continue
-            if since_time and ss.metadata.creation_timestamp and ss.metadata.creation_timestamp <= since_time:
                 continue
             ss_uid = ss.metadata.uid
             ss_info = {
@@ -185,6 +200,8 @@ class KubeLogFetcher:
                 graph_builder.upsert_node("StatefulSet", ss_info)
                 key = graph_builder.get_composite_key("StatefulSet", ss_info)
                 current_keys.append(key)
+            if since_time and ss.metadata.creation_timestamp and ss.metadata.creation_timestamp <= since_time:
+                continue
             yield ss_info
         if graph_builder:
             graph_builder.delete_nodes_and_edges_not_in("StatefulSet", current_keys)
@@ -193,8 +210,6 @@ class KubeLogFetcher:
         self.logger.info("Retrieving node info for topology/graph analysis")
         current_keys = []
         for node in self.v1.list_node().items:
-            if since_time and node.metadata.creation_timestamp and node.metadata.creation_timestamp <= since_time:
-                continue
             node_uid = node.metadata.uid
             node_info = {
                 "TimeGenerated": self.format_timestamp(node.metadata.creation_timestamp),
@@ -206,12 +221,14 @@ class KubeLogFetcher:
             }
             if graph_builder:
                 graph_builder.upsert_node("KubeNode", node_info)
-                key = graph_builder.get_composite_key("KubeNode", node_info)
-                current_keys.append(key)
+                current_keys.append(node_info["name"])
+            if since_time and node.metadata.creation_timestamp and node.metadata.creation_timestamp <= since_time:
+                self.logger.warning(f"Since_time is {since_time}, skipping node {node.metadata.name}, created at {node.metadata.creation_timestamp}")
+                continue
             yield node_info
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("KubeNode", current_keys)
-    
+            graph_builder.delete_nodes_and_edges_not_in("KubeNode", current_keys, None, "name")
+
     def __init__(self, user_settings):
         self.logger = logging.getLogger("kubeLogger")
         try:
@@ -269,12 +286,7 @@ class KubeLogFetcher:
                     current_keys.append(key)
                     node_name = pod.spec.node_name
                     if node_name:
-                        kube_node_info = {
-                            "name": node_name
-                        }
-                        kube_node_key = graph_builder.get_composite_key("KubeNode", kube_node_info)
-                        self.logger.info(f"Upserting RUNS_ON edge: Pod {key} -> KubeNode {kube_node_key}")
-                        graph_builder.upsert_edge("Pod", key, "KubeNode", kube_node_key, "RUNS_ON")
+                        graph_builder.upsert_edge("Pod", key, "KubeNode", node_name, "RUNS_ON", {}, "composite_key", "name")
                     if pod.metadata.owner_references:
                         for owner in pod.metadata.owner_references:
                             if owner.kind in ("Deployment", "ReplicaSet", "StatefulSet"):
@@ -283,13 +295,10 @@ class KubeLogFetcher:
                                     "namespace": pod.metadata.namespace
                                 }
                                 owner_key = graph_builder.get_composite_key(owner.kind, owner_info)
-                                self.logger.info(f"Upserting OWNS edge: Pod {key} -> {owner.kind} {owner_key}")
-                                graph_builder.upsert_edge("Pod", key, owner.kind, owner_key, "OWNS")
-                    else:
-                        ns = pod.metadata.namespace
-                        if ns:
-                            self.logger.info(f"Upserting IN_NAMESPACE edge: Pod {key} -> Namespace {ns}")
-                            graph_builder.upsert_edge("Pod", key, "Namespace", ns, "IN_NAMESPACE", {})
+                                graph_builder.upsert_edge(owner.kind, owner_key, "Pod", key, "OWNS")
+                    ns = pod.metadata.namespace
+                    if ns:
+                        graph_builder.upsert_edge("Pod", key, "Namespace", ns, "IN_NAMESPACE", {})
 
                 if not pod.status.container_statuses:
                     self.logger.info("No container status")
@@ -297,6 +306,12 @@ class KubeLogFetcher:
 
                 # Try to get service account name
                 service_account_name = pod.spec.service_account_name if hasattr(pod.spec, "service_account_name") else None
+                # Add AUTHENTICATED_AS edge: Pod -> ServiceAccount
+                if graph_builder and service_account_name:
+                    pod_key = graph_builder.get_composite_key("Pod", pod_info)
+                    sa_info = {"namespace": pod.metadata.namespace, "name": service_account_name}
+                    sa_key = graph_builder.get_composite_key("ServiceAccount", sa_info)
+                    graph_builder.upsert_edge("Pod", pod_key, "ServiceAccount", sa_key, "AUTHENTICATED_AS")
 
                 for container_status in pod.status.container_statuses:
                     container_name = container_status.name
@@ -358,8 +373,14 @@ class KubeLogFetcher:
             except ApiException as e:
                 self.logger.error(f"Error accessing pod '{pod.metadata.name}': {e}")
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("Pod", current_keys)
-    
+            edge_types = [
+                ("Pod", "RUNS_ON", "KubeNode"),
+                ("ReplicaSet", "OWNS", "Pod"),
+                ("StatefulSet", "OWNS", "Pod"),
+                ("Pod", "IN_NAMESPACE", "Namespace")
+            ]
+            graph_builder.delete_nodes_and_edges_not_in("Pod", current_keys, edge_types=edge_types)
+
     def format_timestamp(self, timestamp):
         # Format from datetime object to plain string, since a datetime is not serializable
         return str(timestamp) if timestamp else ""
@@ -433,7 +454,7 @@ class KubeLogFetcher:
             namespace = ns.metadata.name
             if namespace in self.namespaces_to_skip:
                 continue
-            for sa in self.v1.list_namespaced_service_account(namespace).items:
+            for sa in self.v1.list_namespaced_service_account(namespace).items:                
                 creation_timestamp = self.format_timestamp(sa.metadata.creation_timestamp)
                 sa_info = {
                     "TimeGenerated": creation_timestamp,
@@ -447,6 +468,8 @@ class KubeLogFetcher:
                     graph_builder.upsert_node("ServiceAccount", sa_info)
                     key = graph_builder.get_composite_key("ServiceAccount", sa_info)
                     current_keys.append(key)
+                if since_time and sa.metadata.creation_timestamp and sa.metadata.creation_timestamp <= since_time:
+                    continue
                 yield sa_info
         if graph_builder:
             graph_builder.delete_nodes_and_edges_not_in("ServiceAccount", current_keys)
@@ -456,7 +479,6 @@ class KubeLogFetcher:
         for pod in self.get_pods_stream():
 
             creation_timestamp = self.format_timestamp(pod.metadata.creation_timestamp)
-            # Only yield if created after since_time
             if since_time and pod.metadata.creation_timestamp and pod.metadata.creation_timestamp <= since_time:
                 continue
 
@@ -502,30 +524,42 @@ class KubeLogFetcher:
     def get_rbac_bindings(self, graph_builder=None, since_time=None):
         self.logger.info("Retrieving RBAC bindings")
         current_keys = []
-        for binding in self.rbac_v1.list_role_binding_for_all_namespaces().items:
+
+        # Loop over RoleBindings (namespaced) and ClusterRoleBindings (cluster-scoped)
+        def fetch_role_rules(kind, name, namespace=None):
+            try:
+                if kind == "Role" and namespace:
+                    role = self.rbac_v1.read_namespaced_role(name, namespace)
+                elif kind == "ClusterRole":
+                    role = self.rbac_v1.read_cluster_role(name)
+                else:
+                    return None
+                return [r.to_dict() for r in (role.rules or [])]
+            except Exception as e:
+                self.logger.warning(f"Could not fetch rules for {kind} {name}: {e}")
+                return None
+        bindings = (
+            [(b, False) for b in self.rbac_v1.list_role_binding_for_all_namespaces().items] +
+            [(b, True) for b in self.rbac_v1.list_cluster_role_binding().items]
+        )
+
+        for binding, is_cluster_scope in bindings:           
             creation_timestamp = self.format_timestamp(binding.metadata.creation_timestamp)
             binding_name = binding.metadata.name
             namespace = binding.metadata.namespace
+
+            if namespace in self.namespaces_to_skip:
+                continue
+
             role_ref_kind = binding.role_ref.kind
             role_ref_name = binding.role_ref.name
             role_ref_api_group = getattr(binding.role_ref, "api_group", None)
-
-            # Try to fetch rules for the referenced role
-            rules = None
-            try:
-                if role_ref_kind == "Role":
-                    role = self.rbac_v1.read_namespaced_role(role_ref_name, namespace)
-                    rules = [r.to_dict() for r in (role.rules or [])]
-                elif role_ref_kind == "ClusterRole":
-                    role = self.rbac_v1.read_cluster_role(role_ref_name)
-                    rules = [r.to_dict() for r in (role.rules or [])]
-            except Exception as e:
-                self.logger.warning(f"Could not fetch rules for {role_ref_kind} {role_ref_name}: {e}")
+            rules = fetch_role_rules(role_ref_kind, role_ref_name, namespace)
 
             for subject in binding.subjects or []:
                 rb_info = {
                     "TimeGenerated": creation_timestamp,
-                    "binding_type": "RoleBinding",
+                    "binding_type": "ClusterRoleBinding" if is_cluster_scope else "RoleBinding",
                     "binding_name": binding_name,
                     "namespace": namespace,
                     "subject_kind": subject.kind,
@@ -539,57 +573,35 @@ class KubeLogFetcher:
                     "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None,
                     "deleted": False
                 }
+
+                # Composite key for binding
+                if is_cluster_scope:
+                    binding_key = graph_builder.get_composite_key("ClusterRoleBinding", {"binding_name": binding_name}) if graph_builder else f"{binding_name}"
+                else:
+                    ns = namespace if namespace is not None else "default"
+                    binding_key = graph_builder.get_composite_key("RoleBinding", {"namespace": ns, "binding_name": binding_name}) if graph_builder else f"{ns}:{binding_name}"
+                current_keys.append(binding_key)
+
                 if graph_builder:
-                    graph_builder.upsert_node("RoleBinding", rb_info)
-                    key = graph_builder.get_composite_key("RoleBinding", rb_info)
-                    current_keys.append(key)
+                    graph_builder.upsert_node(rb_info["binding_type"], rb_info)
+
+                if subject.kind == "ServiceAccount":
+                    sa_ns = getattr(subject, "namespace", namespace)
+                    if sa_ns is None:
+                        sa_ns = "default"
+                    sa_name = subject.name
+                    sa_key = graph_builder.get_composite_key("ServiceAccount", {"namespace": sa_ns, "name": sa_name}) if graph_builder else f"{sa_ns}:{sa_name}"
+                    if graph_builder:
+                        graph_builder.upsert_edge("ServiceAccount", sa_key, rb_info["binding_type"], binding_key, "GRANTED")
+                else:
+                    self.logger.info(f"RBAC binding {binding_name}: ignoring subject kind {subject.kind} ({getattr(subject, 'name', None)})")
+                if since_time and binding.metadata.creation_timestamp and binding.metadata.creation_timestamp <= since_time:
+                    continue
                 yield rb_info
 
-        for binding in self.rbac_v1.list_cluster_role_binding().items:
-            creation_timestamp = self.format_timestamp(binding.metadata.creation_timestamp)
-            binding_name = binding.metadata.name
-            namespace = binding.metadata.namespace
-            role_ref_kind = binding.role_ref.kind
-            role_ref_name = binding.role_ref.name
-            role_ref_api_group = getattr(binding.role_ref, "api_group", None)
-
-            # Try to fetch rules for the referenced role
-            rules = None
-            try:
-                if role_ref_kind == "Role":
-                    # ClusterRoleBinding should not reference Role, but handle just in case
-                    role = self.rbac_v1.read_namespaced_role(role_ref_name, namespace)
-                    rules = [r.to_dict() for r in (role.rules or [])]
-                elif role_ref_kind == "ClusterRole":
-                    role = self.rbac_v1.read_cluster_role(role_ref_name)
-                    rules = [r.to_dict() for r in (role.rules or [])]
-            except Exception as e:
-                self.logger.warning(f"Could not fetch rules for {role_ref_kind} {role_ref_name}: {e}")
-
-            for subject in binding.subjects or []:
-                rb_info = {
-                    "TimeGenerated": creation_timestamp,
-                    "binding_type": "RoleBinding",
-                    "binding_name": binding_name,
-                    "namespace": namespace,
-                    "subject_kind": subject.kind,
-                    "subject_name": subject.name,
-                    "subject_namespace": getattr(subject, "namespace", namespace),
-                    "role_ref_kind": role_ref_kind,
-                    "role_ref_name": role_ref_name,
-                    "role_ref_api_group": role_ref_api_group,
-                    "rules": rules,
-                    "subjects": [s.to_dict() for s in (binding.subjects or [])],
-                    "roleRef": binding.role_ref.to_dict() if hasattr(binding, "role_ref") else None,
-                    "deleted": False
-                }
-                if graph_builder:
-                    graph_builder.upsert_node("RoleBinding", rb_info)
-                    key = graph_builder.get_composite_key("RoleBinding", rb_info)
-                    current_keys.append(key)
-                yield rb_info
         if graph_builder:
             graph_builder.delete_nodes_and_edges_not_in("RoleBinding", current_keys)
+            graph_builder.delete_nodes_and_edges_not_in("ClusterRoleBinding", current_keys)
 
     def get_cronjob_containers_info(self, graph_builder=None, since_time=None):
         self.logger.info("Extracting CronJob container info")
@@ -621,6 +633,16 @@ class KubeLogFetcher:
                 continue
             creation_timestamp = self.format_timestamp(np.metadata.creation_timestamp)
             allowed_pod_keys = []
+            # Handle podSelector: {} at the policy level (matches all pods in the namespace)
+            if hasattr(np, "spec") and np.spec and hasattr(np.spec, "pod_selector") and np.spec.pod_selector is not None:
+                pod_selector = getattr(np.spec, "pod_selector", None)
+                if pod_selector is not None:
+                    match_labels = getattr(pod_selector, "match_labels", None)
+                    if not match_labels:  # True if None or empty dict
+                        # podSelector: {} matches all pods
+                        pods = self.v1.list_namespaced_pod(namespace=np.metadata.namespace).items
+                        for pod in pods:
+                            allowed_pod_keys.append(f"{pod.metadata.namespace}:{pod.metadata.name}")
             # Try to resolve allowed pods from ingress/egress rules
             if hasattr(np, "spec") and np.spec and np.spec.ingress:
                 for ingress in np.spec.ingress:
@@ -643,8 +665,10 @@ class KubeLogFetcher:
                 key = graph_builder.get_composite_key("NetworkPolicy", np_info)
                 current_keys.append(key)
                 for pod_key in allowed_pod_keys:
-                    self.logger.info(f"Upserting ALLOWS edge: NetworkPolicy {key} -> Pod {pod_key}")
                     graph_builder.upsert_edge("NetworkPolicy", key, "Pod", pod_key, "ALLOWS")
+            if since_time and np.metadata.creation_timestamp and np.metadata.creation_timestamp <= since_time:
+                continue
             yield np_info
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("NetworkPolicy", current_keys)
+            edge_types = [("NetworkPolicy", "ALLOWS", "Pod")]
+            graph_builder.delete_nodes_and_edges_not_in("NetworkPolicy", current_keys, edge_types=edge_types)
