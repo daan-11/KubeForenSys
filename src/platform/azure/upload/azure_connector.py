@@ -30,7 +30,6 @@ class AzureConnector:
             for entry in generator_function():
                 batch.append(entry)
                 if len(batch) >= self.BATCH_SIZE:
-                    print(f"Uploading batch of size {len(batch)} to {dcr_stream_id} - \n {batch}")
                     try:
                         self.client.upload(
                             rule_id=dcr_stream_id,
