@@ -1,7 +1,8 @@
 import json
-from neo4j import GraphDatabase
 import logging
 import os
+from .neo4j_connector import Neo4jConnector
+
 
 class Neo4jGraphBuilder:
     def list_nodes(self, label):
@@ -47,9 +48,8 @@ class Neo4jGraphBuilder:
         else:
             return set()
         query = f"MATCH (n:{label}) RETURN n.{key_field} as key"
-        with self.driver.session() as session:
-            result = session.run(query).data()
-            return set([str(record["key"]) for record in result if record.get("key")])
+        result = self.connector.run_query(query)
+        return set([str(record["key"]) for record in result if record.get("key")])
 
     def list_edges(self, from_label, rel_type, to_label):
         """
@@ -59,9 +59,8 @@ class Neo4jGraphBuilder:
             f"MATCH (a:{from_label})-[r:{rel_type}]->(b:{to_label}) "
             f"RETURN a.composite_key as from_key, b.composite_key as to_key"
         )
-        with self.driver.session() as session:
-            result = session.run(query)
-            return set([(record["from_key"], record["to_key"]) for record in result if record["from_key"] and record["to_key"]])
+        result = self.connector.run_query(query)
+        return set([(record["from_key"], record["to_key"]) for record in result if record.get("from_key") and record.get("to_key")])
 
     def delete_nodes_and_edges_not_in(self, label, current_keys, edge_types=None, key_name="composite_key"):
         """
@@ -87,20 +86,18 @@ class Neo4jGraphBuilder:
             f"MATCH (a:{from_label} {{{from_key_name}: $from_key}})-[r:{rel_type}]->(b:{to_label} {{{to_key_name}: $to_key}}) "
             f"DELETE r"
         )
-        with self.driver.session() as session:
-            session.run(query, from_key=from_key, to_key=to_key)
+        self.connector.run_query(query, {"from_key": from_key, "to_key": to_key})
 
     def __init__(self, credentials_path="/home/derksen/Documents/KubeForenSys/neo4j-credentials.json"):
-        with open(credentials_path, "r") as f:
-            creds = json.load(f)
-        uri = f"bolt://{creds['vm_public_ip']}:7687"
-        user = creds["neo4j_username"]
-        password = creds["neo4j_password"]
-        self.driver = GraphDatabase.driver(uri, auth=(user, password))
+        # Use Neo4jConnector wrapper for all DB interactions
+        self.connector = Neo4jConnector(credentials_path=credentials_path)
         self.logger = logging.getLogger("Neo4jGraphBuilder")
 
     def close(self):
-        self.driver.close()
+        try:
+            self.connector.close()
+        except Exception:
+            pass
 
     def upsert_node(self, label, properties):
         """
@@ -168,13 +165,12 @@ class Neo4jGraphBuilder:
             f"MERGE (n:{label} {{{key_field}: ${key_field}}}) "
             f"SET {prop_keys} "
         )
-        with self.driver.session() as session:
-            session.run(query, **safe_props)
+        # Run query via connector
+        self.connector.run_query(query, safe_props)
 
     def delete_node(self, label, key, key_name="composite_key"):
         query = f"MATCH (n:{label} {{{key_name}: $key}}) DETACH DELETE n"
-        with self.driver.session() as session:
-            session.run(query, key=key)
+        self.connector.run_query(query, {"key": key})
 
     def upsert_edge(self, from_label, from_key, to_label, to_key, rel_type, properties=None, from_key_name="composite_key", to_key_name="composite_key"):
         if properties is None:
@@ -188,8 +184,7 @@ class Neo4jGraphBuilder:
             f"{set_clause}"
         )
         params = {"from_key": from_key, "to_key": to_key, **properties}
-        with self.driver.session() as session:
-            session.run(query, **params)
+        self.connector.run_query(query, params)
 
     # Helper for composite keys
     def get_composite_key(self, label, properties):

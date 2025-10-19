@@ -173,11 +173,25 @@ class KubeLogFetcher:
                         }
                         owner_key = graph_builder.get_composite_key(owner.kind, owner_info)
                         graph_builder.upsert_edge(owner.kind, owner_key, "ReplicaSet", key, "OWNS")
+                # Also link ReplicaSet -> Pod by selector (ensure replicaset owns its pods)
+                try:
+                    selector = None
+                    if rs.spec and getattr(rs.spec, 'selector', None):
+                        selector = getattr(rs.spec.selector, 'match_labels', None) or getattr(rs.spec.selector, 'match_expressions', None)
+                    if selector and isinstance(selector, dict):
+                        label_selector = ','.join([f"{k}={v}" for k, v in selector.items()])
+                        pods = self.v1.list_namespaced_pod(namespace=rs.metadata.namespace, label_selector=label_selector).items
+                        for pod in pods:
+                            pod_key = f"{pod.metadata.namespace}:{pod.metadata.name}"
+                            graph_builder.upsert_edge("ReplicaSet", key, "Pod", pod_key, "OWNS")
+                except Exception:
+                    # Non-fatal: best-effort linking; pod-owner edges are also created when pods are processed
+                    self.logger.debug(f"Could not create ReplicaSet->Pod edges for {rs.metadata.name}")
             if since_time and rs.metadata.creation_timestamp and rs.metadata.creation_timestamp <= since_time:
                 continue
             yield rs_info
         if graph_builder:
-            edge_types = [("Deployment", "OWNS", "ReplicaSet")]
+            edge_types = [("Deployment", "OWNS", "ReplicaSet"), ("ReplicaSet", "OWNS", "Pod")]
             graph_builder.delete_nodes_and_edges_not_in("ReplicaSet", current_keys, edge_types=edge_types)
 
     def get_statefulsets(self, graph_builder=None, last_ss_states=None, since_time=None):
@@ -200,11 +214,25 @@ class KubeLogFetcher:
                 graph_builder.upsert_node("StatefulSet", ss_info)
                 key = graph_builder.get_composite_key("StatefulSet", ss_info)
                 current_keys.append(key)
+                # Link StatefulSet -> Pod by selector (best-effort)
+                try:
+                    selector = None
+                    if ss.spec and getattr(ss.spec, 'selector', None):
+                        selector = getattr(ss.spec.selector, 'match_labels', None) or getattr(ss.spec.selector, 'match_expressions', None)
+                    if selector and isinstance(selector, dict):
+                        label_selector = ','.join([f"{k}={v}" for k, v in selector.items()])
+                        pods = self.v1.list_namespaced_pod(namespace=ss.metadata.namespace, label_selector=label_selector).items
+                        for pod in pods:
+                            pod_key = f"{pod.metadata.namespace}:{pod.metadata.name}"
+                            graph_builder.upsert_edge("StatefulSet", key, "Pod", pod_key, "OWNS")
+                except Exception:
+                    self.logger.debug(f"Could not create StatefulSet->Pod edges for {ss.metadata.name}")
             if since_time and ss.metadata.creation_timestamp and ss.metadata.creation_timestamp <= since_time:
                 continue
             yield ss_info
         if graph_builder:
-            graph_builder.delete_nodes_and_edges_not_in("StatefulSet", current_keys)
+            edge_types = [("StatefulSet", "OWNS", "Pod")]
+            graph_builder.delete_nodes_and_edges_not_in("StatefulSet", current_keys, edge_types=edge_types)
     
     def get_nodes(self, graph_builder=None, last_node_states=None, since_time=None):
         self.logger.info("Retrieving node info for topology/graph analysis")
@@ -633,18 +661,31 @@ class KubeLogFetcher:
                 continue
             creation_timestamp = self.format_timestamp(np.metadata.creation_timestamp)
             allowed_pod_keys = []
-            # Handle podSelector: {} at the policy level (matches all pods in the namespace)
+            # Add ALLOWS edges if ingress or egress is a non-empty list (including [{}])
+            allows_traffic = False
+            if hasattr(np, "spec") and np.spec:
+                ingress = getattr(np.spec, "ingress", None)
+                egress = getattr(np.spec, "egress", None)
+                if ingress and isinstance(ingress, list) and len(ingress) > 0:
+                    allows_traffic = True
+                if egress and isinstance(egress, list) and len(egress) > 0:
+                    allows_traffic = True
+            # Always collect allowed_pod_keys based on podSelector
             if hasattr(np, "spec") and np.spec and hasattr(np.spec, "pod_selector") and np.spec.pod_selector is not None:
                 pod_selector = getattr(np.spec, "pod_selector", None)
                 if pod_selector is not None:
                     match_labels = getattr(pod_selector, "match_labels", None)
-                    if not match_labels:  # True if None or empty dict
-                        # podSelector: {} matches all pods
+                    if not match_labels:  # podSelector: {} matches all pods
                         pods = self.v1.list_namespaced_pod(namespace=np.metadata.namespace).items
                         for pod in pods:
                             allowed_pod_keys.append(f"{pod.metadata.namespace}:{pod.metadata.name}")
-            # Try to resolve allowed pods from ingress/egress rules
-            if hasattr(np, "spec") and np.spec and np.spec.ingress:
+                    else:
+                        label_selector = ','.join([f"{k}={v}" for k, v in match_labels.items()])
+                        pods = self.v1.list_namespaced_pod(namespace=np.metadata.namespace, label_selector=label_selector).items
+                        for pod in pods:
+                            allowed_pod_keys.append(f"{pod.metadata.namespace}:{pod.metadata.name}")
+            # Try to resolve allowed pods from ingress/egress rules (optional, keep as is)
+            if allows_traffic and hasattr(np, "spec") and np.spec and np.spec.ingress:
                 for ingress in np.spec.ingress:
                     for peer in getattr(ingress, "from", []) or []:
                         if getattr(peer, "pod_selector", None):
@@ -664,8 +705,9 @@ class KubeLogFetcher:
                 graph_builder.upsert_node("NetworkPolicy", np_info)
                 key = graph_builder.get_composite_key("NetworkPolicy", np_info)
                 current_keys.append(key)
-                for pod_key in allowed_pod_keys:
-                    graph_builder.upsert_edge("NetworkPolicy", key, "Pod", pod_key, "ALLOWS")
+                if allows_traffic:
+                    for pod_key in allowed_pod_keys:
+                        graph_builder.upsert_edge("NetworkPolicy", key, "Pod", pod_key, "ALLOWS")
             if since_time and np.metadata.creation_timestamp and np.metadata.creation_timestamp <= since_time:
                 continue
             yield np_info
