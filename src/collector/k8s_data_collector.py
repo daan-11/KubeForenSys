@@ -437,7 +437,6 @@ class KubeLogFetcher:
     def retrieve_command_history(self, graph_builder=None, since_time=None):
 
         HISTORY_PATHS = [
-        "/root/.ash_history",
         "/root/.bash_history"
         ]
         self.logger.info("Retrieving command history")

@@ -5,11 +5,11 @@ RESOURCE_GROUP="RP-daan"
 AKS_CLUSTER="myAKSCluster"
 VENV_PATH="/home/derksen/Documents/KubeForenSys/venv"
 
-echo "Getting AKS credentials (before starting)..."
-az aks get-credentials -g $RESOURCE_GROUP -n $AKS_CLUSTER --overwrite-existing || true
+# echo "Getting AKS credentials (before starting)..."
+# az aks get-credentials -g $RESOURCE_GROUP -n $AKS_CLUSTER --overwrite-existing || true
 
-echo "Starting AKS cluster: $AKS_CLUSTER..."
-az aks start -g $RESOURCE_GROUP -n $AKS_CLUSTER
+# echo "Starting AKS cluster: $AKS_CLUSTER..."
+# az aks start -g $RESOURCE_GROUP -n $AKS_CLUSTER
 
 echo "Waiting for cluster to be ready..."
 az aks wait -g $RESOURCE_GROUP -n $AKS_CLUSTER --created

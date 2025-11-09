@@ -1,8 +1,11 @@
+
 import json
 import logging
 import os
 from .neo4j_connector import Neo4jConnector
 
+# Optional heavy dependency used only by the conversion function
+import networkx as nx
 
 class Neo4jGraphBuilder:
     def list_nodes(self, label):
@@ -210,3 +213,144 @@ class Neo4jGraphBuilder:
             except Exception:
                 return None
         return properties.get("uid")
+
+    def to_networkx_full_graph(self, directed: bool = True):
+        """Convert the entire Neo4j database to a NetworkX Multi(Di)Graph.
+
+        - Uses internal Neo4j node ids as NetworkX node keys.
+        - Copies node labels into the node attribute 'neo4j_labels'.
+        - Copies relationship type into edge attribute 'neo4j_type' and the
+          relationship id into 'neo4j_rid'.
+        - Returns a tuple (G, report) where report contains counts and any
+          discrepancy details.
+        """
+        logger = self.logger or logging.getLogger("Neo4jGraphBuilder")
+        G = nx.MultiDiGraph() if directed else nx.MultiGraph()
+
+        # Fetch nodes using elementId() to avoid deprecated id() usage (returns stable string id)
+        node_query = "MATCH (n) RETURN elementId(n) as nid, labels(n) as labels, properties(n) as props"
+        node_rows = self.connector.run_query(node_query)
+        neo4j_node_ids = set()
+        for rec in node_rows:
+            nid = rec.get("nid")
+            if nid is None:
+                continue
+            neo4j_node_ids.add(nid)
+            labels = rec.get("labels") or []
+            props = rec.get("props") or {}
+            # serialize dict/list props to JSON strings to keep NetworkX happy
+            safe_props = {}
+            for k, v in props.items():
+                if isinstance(v, (dict, list)):
+                    try:
+                        safe_props[k] = json.dumps(v)
+                    except Exception:
+                        safe_props[k] = str(v)
+                else:
+                    safe_props[k] = v
+            safe_props["neo4j_labels"] = labels
+            G.add_node(nid, **safe_props)
+
+        # Fetch relationships using elementId() to avoid deprecated id() usage
+        rel_query = (
+            "MATCH (a)-[r]->(b) RETURN elementId(r) as rid, elementId(a) as source, elementId(b) as target, "
+            "type(r) as type, properties(r) as props"
+        )
+        rel_rows = self.connector.run_query(rel_query)
+        neo4j_rel_ids = set()
+        for rec in rel_rows:
+            rid = rec.get("rid")
+            src = rec.get("source")
+            dst = rec.get("target")
+            if rid is None or src is None or dst is None:
+                continue
+            neo4j_rel_ids.add(rid)
+            rtype = rec.get("type")
+            props = rec.get("props") or {}
+            safe_props = {}
+            for k, v in props.items():
+                if isinstance(v, (dict, list)):
+                    try:
+                        safe_props[k] = json.dumps(v)
+                    except Exception:
+                        safe_props[k] = str(v)
+                else:
+                    safe_props[k] = v
+            safe_props["neo4j_type"] = rtype
+            safe_props["neo4j_rid"] = rid
+            # Add edge with Neo4j relationship elementId as the key to preserve multiplicity
+            try:
+                G.add_edge(src, dst, key=rid, **safe_props)
+            except Exception:
+                # Fallback: add without key if something goes wrong
+                G.add_edge(src, dst, **safe_props)
+
+        # Validation: compare counts
+        try:
+            total_nodes_db = int(self.connector.scalar("MATCH (n) RETURN count(n)"))
+        except Exception:
+            total_nodes_db = None
+        try:
+            total_rels_db = int(self.connector.scalar("MATCH ()-[r]->() RETURN count(r)"))
+        except Exception:
+            total_rels_db = None
+
+        nx_nodes = G.number_of_nodes()
+        nx_rels = G.number_of_edges()
+
+        report = {
+            "neo4j_node_count": total_nodes_db,
+            "neo4j_rel_count": total_rels_db,
+            "networkx_node_count": nx_nodes,
+            "networkx_rel_count": nx_rels,
+            "node_id_set_db": neo4j_node_ids,
+            "rel_id_set_db": neo4j_rel_ids,
+            "node_id_set_nx": set(G.nodes()),
+            "rel_id_set_nx": set((u, v, k) for u, v, k in G.edges(keys=True)),
+            "node_discrepancies": [],
+            "rel_discrepancies": []
+        }
+
+        # Determine discrepancies (only if we successfully fetched DB counts)
+        if total_nodes_db is not None and total_nodes_db != nx_nodes:
+            missing_in_nx = report["node_id_set_db"] - report["node_id_set_nx"]
+            extra_in_nx = report["node_id_set_nx"] - report["node_id_set_db"]
+            report["node_discrepancies"] = {
+                "missing_in_networkx": missing_in_nx,
+                "extra_in_networkx": extra_in_nx
+            }
+            logger.warning(
+                f"Node count mismatch: neo4j={total_nodes_db} vs networkx={nx_nodes}. "
+                f"Missing in NX: {len(missing_in_nx)}; Extra in NX: {len(extra_in_nx)}"
+            )
+
+        if total_rels_db is not None and total_rels_db != nx_rels:
+            # Build set of relationship identifiers from DB rows: (src, dst, rid)
+            db_rel_set = set()
+            for rec in rel_rows:
+                rid = rec.get("rid")
+                src = rec.get("source")
+                dst = rec.get("target")
+                if rid is None or src is None or dst is None:
+                    continue
+                db_rel_set.add((src, dst, rid))
+
+            nx_rel_set = report["rel_id_set_nx"]
+            missing_rels = db_rel_set - nx_rel_set
+            extra_rels = nx_rel_set - db_rel_set
+            report["rel_discrepancies"] = {
+                "missing_in_networkx": missing_rels,
+                "extra_in_networkx": extra_rels
+            }
+            logger.warning(
+                f"Relationship count mismatch: neo4j={total_rels_db} vs networkx={nx_rels}. "
+                f"Missing in NX: {len(missing_rels)}; Extra in NX: {len(extra_rels)}"
+            )
+
+        # Print concise summary to stdout as well for immediate visibility
+        print(
+            f"[neo4j->networkx] nodes: neo4j={total_nodes_db} networkx={nx_nodes}; "
+            f"rels: neo4j={total_rels_db} networkx={nx_rels}"
+        )
+
+        return G, report

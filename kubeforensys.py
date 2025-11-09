@@ -70,6 +70,7 @@ def main():
     import time
     from datetime import datetime, timezone
     from src.graphing.neo4j_graph_builder import Neo4jGraphBuilder
+    from src.graphing.graph_analysis import run_algorithms_on_subgraphs
     graph_builder = Neo4jGraphBuilder()
 
     # Load last upload times from config if present (and not --initial)
@@ -149,10 +150,83 @@ def main():
     if user_settings.get("continuous"):
         while True:
             run_collection()
+            # After each main run, convert Neo4j -> NetworkX and validate
+            try:
+                G, report = graph_builder.to_networkx_full_graph()
+                # Log any discrepancies
+                neo_nodes = report.get("neo4j_node_count")
+                neo_rels = report.get("neo4j_rel_count")
+                nx_nodes = report.get("networkx_node_count")
+                nx_rels = report.get("networkx_rel_count")
+                if (neo_nodes is not None and neo_nodes != nx_nodes) or (neo_rels is not None and neo_rels != nx_rels):
+                    logger.warning(f"Graph discrepancy detected after run: neo4j nodes={neo_nodes} networkx nodes={nx_nodes}; neo4j rels={neo_rels} networkx rels={nx_rels}")
+                    # Print details for quick debugging
+                    print("Discrepancy detail summary:")
+                    print(f"  node_discrepancies: {report.get('node_discrepancies')}")
+                    print(f"  rel_discrepancies: {report.get('rel_discrepancies')}")
+                # Run analysis specs on selected subgraphs (do not run on full graph)
+                try:
+                    specs = [
+                        {
+                            "name": "pods_and_nodes_closeness",
+                            "node_labels": ["Pod", "KubeNode"],
+                            "edge_types": ["RUNS_ON"],
+                            "algorithm": "closeness",
+                            "algorithm_kwargs": {},
+                        },
+                        {
+                            "name": "serviceaccount_pivot_betweenness",
+                            "node_labels": ["ServiceAccount", "Pod", "RoleBinding", "ClusterRoleBinding"],
+                            "edge_types": ["AUTHENTICATED_AS", "GRANTED"],
+                            "algorithm": "betweenness",
+                            "algorithm_kwargs": {"k": 100},
+                        },
+                        {
+                            "name": "service_selects_degree",
+                            "node_labels": ["Service", "Pod"],
+                            "edge_types": ["SELECTS"],
+                            "algorithm": "degree",
+                            "algorithm_kwargs": {"normalized": False},
+                        },
+                        {
+                            "name": "networkpolicy_community",
+                            "node_labels": ["NetworkPolicy", "Pod"],
+                            "edge_types": ["ALLOWS"],
+                            "algorithm": "community",
+                            "algorithm_kwargs": {"method": "greedy"},
+                        },
+                        {
+                            "name": "node_runson_closeness",
+                            "node_labels": ["Pod", "KubeNode"],
+                            "edge_types": ["RUNS_ON", "IN_NAMESPACE"],
+                            "algorithm": "closeness",
+                            "algorithm_kwargs": {},
+                        },
+                    ]
+                    print(f"Running analysis on subgraphs...")
+                    run_algorithms_on_subgraphs(G, specs, print_results=True)
+                except Exception as e:
+                    logger.exception(f"Failed to run graph analyses: {e}")
+            except Exception as e:
+                logger.exception(f"Failed to convert/validate Neo4j -> NetworkX: {e}")
             time.sleep(user_settings.get("interval", 60))
         graph_builder.close()
     else:
         run_collection()
+        # Do a final conversion/validation on the one-shot run as well
+        try:
+            G, report = graph_builder.to_networkx_full_graph()
+            neo_nodes = report.get("neo4j_node_count")
+            neo_rels = report.get("neo4j_rel_count")
+            nx_nodes = report.get("networkx_node_count")
+            nx_rels = report.get("networkx_rel_count")
+            if (neo_nodes is not None and neo_nodes != nx_nodes) or (neo_rels is not None and neo_rels != nx_rels):
+                logger.warning(f"Graph discrepancy detected: neo4j nodes={neo_nodes} networkx nodes={nx_nodes}; neo4j rels={neo_rels} networkx rels={nx_rels}")
+                print("Discrepancy detail summary:")
+                print(f"  node_discrepancies: {report.get('node_discrepancies')}")
+                print(f"  rel_discrepancies: {report.get('rel_discrepancies')}")
+        except Exception as e:
+            logger.exception(f"Failed to convert/validate Neo4j -> NetworkX: {e}")
         graph_builder.close()
 
 if __name__ == "__main__":
