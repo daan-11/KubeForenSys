@@ -7,3 +7,4 @@ azure.mgmt.loganalytics
 tenacity
 pandas
 networkx
+scipy

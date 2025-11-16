@@ -1,0 +1,13 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: np-ns-06-allow-same-ns-ingress
+  namespace: ns-06
+spec:
+  podSelector: {}  # all pods
+  ingress:
+  - from:
+    - podSelector: {}  # same namespace
+  egress:
+  - to:
+    - podSelector: {}  # same namespace (keeps rules non-empty)

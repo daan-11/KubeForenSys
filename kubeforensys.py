@@ -70,7 +70,7 @@ def main():
     import time
     from datetime import datetime, timezone
     from src.graphing.neo4j_graph_builder import Neo4jGraphBuilder
-    from src.graphing.graph_analysis import run_algorithms_on_subgraphs
+    from src.graphing.graph_analysis import run_live_security_analyses
     graph_builder = Neo4jGraphBuilder()
 
     # Load last upload times from config if present (and not --initial)
@@ -164,49 +164,21 @@ def main():
                     print("Discrepancy detail summary:")
                     print(f"  node_discrepancies: {report.get('node_discrepancies')}")
                     print(f"  rel_discrepancies: {report.get('rel_discrepancies')}")
-                # Run analysis specs on selected subgraphs (do not run on full graph)
+                # Run focused LIVE security analyses and persist state for temporal detection
                 try:
-                    specs = [
-                        {
-                            "name": "pods_and_nodes_closeness",
-                            "node_labels": ["Pod", "KubeNode"],
-                            "edge_types": ["RUNS_ON"],
-                            "algorithm": "closeness",
-                            "algorithm_kwargs": {},
-                        },
-                        {
-                            "name": "serviceaccount_pivot_betweenness",
-                            "node_labels": ["ServiceAccount", "Pod", "RoleBinding", "ClusterRoleBinding"],
-                            "edge_types": ["AUTHENTICATED_AS", "GRANTED"],
-                            "algorithm": "betweenness",
-                            "algorithm_kwargs": {"k": 100},
-                        },
-                        {
-                            "name": "service_selects_degree",
-                            "node_labels": ["Service", "Pod"],
-                            "edge_types": ["SELECTS"],
-                            "algorithm": "degree",
-                            "algorithm_kwargs": {"normalized": False},
-                        },
-                        {
-                            "name": "networkpolicy_community",
-                            "node_labels": ["NetworkPolicy", "Pod"],
-                            "edge_types": ["ALLOWS"],
-                            "algorithm": "community",
-                            "algorithm_kwargs": {"method": "greedy"},
-                        },
-                        {
-                            "name": "node_runson_closeness",
-                            "node_labels": ["Pod", "KubeNode"],
-                            "edge_types": ["RUNS_ON", "IN_NAMESPACE"],
-                            "algorithm": "closeness",
-                            "algorithm_kwargs": {},
-                        },
-                    ]
-                    print(f"Running analysis on subgraphs...")
-                    run_algorithms_on_subgraphs(G, specs, print_results=True)
+                    prev_graph_state = (config_data or {}).get("graph_state", {}) if config_data is not None else {}
+                    print("Running LIVE security analyses (betweenness, communities, temporal anomalies, closeness, pagerank)...")
+                    analysis = run_live_security_analyses(G, previous_state=prev_graph_state, print_results=True, top_k=10)
+                    # Persist updated state for next iteration
+                    new_state = analysis.get("updated_state", {})
+                    if config_data is None:
+                        config_data = {}
+                    config_data["graph_state"] = new_state
+                    # Always save state since this is crucial for temporal detection
+                    with open(CONFIG_PATH, "w") as f:
+                        json.dump(config_data, f)
                 except Exception as e:
-                    logger.exception(f"Failed to run graph analyses: {e}")
+                    logger.exception(f"Failed to run LIVE security analyses: {e}")
             except Exception as e:
                 logger.exception(f"Failed to convert/validate Neo4j -> NetworkX: {e}")
             time.sleep(user_settings.get("interval", 60))

@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-02-02
+  namespace: ns-02
+  labels:
+    app: app-02-02
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-02-02
+  template:
+    metadata:
+      labels:
+        app: app-02-02
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: nginx
+        image: nginx:1.25
+        ports:
+        - containerPort: 80

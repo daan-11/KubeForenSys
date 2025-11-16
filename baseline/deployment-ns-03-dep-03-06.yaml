@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-03-06
+  namespace: ns-03
+  labels:
+    app: app-03-06
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-03-06
+  template:
+    metadata:
+      labels:
+        app: app-03-06
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: nginx
+        image: nginx:1.25
+        ports:
+        - containerPort: 80

@@ -1,0 +1,115 @@
+Running LIVE security analyses (betweenness, communities, temporal anomalies, closeness, pagerank)...
+
+[betweenness] pivoting subgraph:
+  nodes=199 edges=212
+  ns-01:default -> 0.0005383787109675435
+  ns-03:default -> 0.00046146746654360867
+  ns-02:default -> 0.00046146746654360867
+  ns-07:default -> 0.00030764497769573913
+  ns-04:default -> 0.00030764497769573913
+  ns-05:default -> 0.00030764497769573913
+  ns-08:default -> 0.00030764497769573913
+  ns-06:default -> 0.00030764497769573913
+  ns-10:default -> 0.00030764497769573913
+  ns-09:default -> 0.00030764497769573913
+
+[communities] modularity groups:
+  nodes=133 edges=240 groups=18
+  community changes detected (node, from, to):
+    ns-02:np-ns-02-allow-kube-dns-egress: 8 -> 0
+    ns-02:dep-02-03-5f67465548-kfswh: 8 -> 0
+    ns-02:dep-02-01-5b86f65c58-dkvp2: 8 -> 0
+    ns-02:svc-bridge-ns-02: None -> 0
+    ns-02:svc-02-02: 8 -> 0
+    ns-02:svc-02-01: 8 -> 0
+    ns-02:dep-02-02-7449d88c99-xvqxd: 8 -> 0
+    ns-02:np-ns-02-allow-same-ns-ingress: 8 -> 0
+    ns-02:dep-02-05-b5dbc89c8-kfl9z: 8 -> 0
+    ns-02:dep-02-04-86b8dc645c-wchlv: 8 -> 0
+  NMI(previous,current)=1.000
+
+[temporal] new relationships since last run:
+  total_new=13
+  by_type={
+    'SELECTS': 1,
+    'GRANTED': 1,
+    'IN_NAMESPACE': 3,
+    'ENDPOINT_OF': 1,
+    'RUNS_ON': 2,
+    'ALLOWS': 4,
+    'AUTHENTICATED_AS': 1
+  }
+  relationships:
+    SELECTS: ns-02:svc-bridge-ns-02 -> ns-02:pivot-sa-evil-ns-02
+    GRANTED: ns-02:sa-evil -> crb-sa-evil-cluster-admin-ns-02
+    IN_NAMESPACE: ns-02:svc-bridge-ns-02 -> ns-02
+    ENDPOINT_OF: ns-02:svc-bridge-ns-02 -> ns-02:pivot-sa-evil-ns-02
+    RUNS_ON: ns-02:pivot-sa-evil-ns-02 -> aks-nodepool1-37404938-vmss000000
+    ALLOWS: ns-01:np-ns-01-allow-same-ns-ingress -> ns-01:compromised-app-01
+    ALLOWS: ns-02:np-ns-02-allow-same-ns-ingress -> ns-02:pivot-sa-evil-ns-02
+    ALLOWS: ns-02:np-ns-02-allow-kube-dns-egress -> ns-02:pivot-sa-evil-ns-02
+    RUNS_ON: ns-01:compromised-app-01 -> aks-nodepool1-37404938-vmss000000
+    IN_NAMESPACE: ns-01:compromised-app-01 -> ns-01
+  spike_detected=True
+  type_spikes={'SELECTS': 1, 'GRANTED': 1, 'IN_NAMESPACE': 3, 'ENDPOINT_OF': 1, 'RUNS_ON': 2, 'ALLOWS': 4, 'AUTHENTICATED_AS': 1}
+
+[closeness] influence subgraph:
+  nodes=84 edges=124
+  aks-nodepool1-37404938-vmss000000 -> 0.773552039483234
+  ns-03:dep-03-01-fb8f8cd67-jk2kt -> 0.41963934168044725
+  ns-06:dep-06-05-77cf9bf566-9d64s -> 0.41963934168044725
+  ns-06:dep-06-02-6b77746cbc-pq8fs -> 0.41963934168044725
+  ns-05:dep-05-03-775cf9f8c9-tj9hr -> 0.41963934168044725
+  ns-01:dep-01-01-fd8867c7c-ctzzw -> 0.41963934168044725
+  ns-02:dep-02-01-5b86f65c58-dkvp2 -> 0.41963934168044725
+  ns-04:dep-04-05-58d9fdbfd4-vkrhk -> 0.41963934168044725
+  ns-05:dep-05-01-79bccc697-gtwlf -> 0.41963934168044725
+  ns-07:dep-07-06-7f9b58b546-cg2hh -> 0.41963934168044725
+
+[pagerank] RBAC influence subgraph:
+  nodes=198 edges=149
+  ns-02 -> 0.015503993722361468
+  ns-01 -> 0.01400647590457046
+  ns-01:default -> 0.01400647590457046
+  ns-03 -> 0.012508958086779449
+  ns-04 -> 0.012508958086779449
+  ns-07:default -> 0.012508958086779449
+  ns-05 -> 0.012508958086779449
+  ns-06 -> 0.012508958086779449
+  ns-09 -> 0.012508958086779449
+  ns-08 -> 0.012508958086779449
+
+=== Detection Summary ===
+- DETECTION betweenness pivoting:
+    issues found:
+      ns-02:sa-evil: 0.000000 -> 0.000026 
+- DETECTION community changes:
+    issues found:
+      ns-02:np-ns-02-allow-kube-dns-egress: 8 -> 0
+      ns-02:dep-02-03-5f67465548-kfswh: 8 -> 0
+      ns-02:dep-02-01-5b86f65c58-dkvp2: 8 -> 0
+      ns-02:svc-bridge-ns-02: None -> 0
+      ns-02:svc-02-02: 8 -> 0
+      ns-02:svc-02-01: 8 -> 0
+      ns-02:dep-02-02-7449d88c99-xvqxd: 8 -> 0
+      ns-02:np-ns-02-allow-same-ns-ingress: 8 -> 0
+      ns-02:dep-02-05-b5dbc89c8-kfl9z: 8 -> 0
+      ns-02:dep-02-04-86b8dc645c-wchlv: 8 -> 0
+    NMI=1.000 (threshold 0.8)
+- DETECTION temporal spikes:
+    issues found:
+      total_new=13
+      spike=True
+      type_spikes={'SELECTS': 1, 'GRANTED': 1, 'IN_NAMESPACE': 3, 'ENDPOINT_OF': 1, 'RUNS_ON': 2, 'ALLOWS': 4, 'AUTHENTICATED_AS': 1}
+- DETECTION closeness influence:
+    issues found:
+      ns-01:compromised-app-01: 0.000000 -> 0.419639
+      ns-02:pivot-sa-evil-ns-02: 0.000000 -> 0.414225
+      ns-02:sa-evil: 0.000000 -> 0.288104 
+- DETECTION RBAC PageRank:
+    issues found:
+      crb-sa-evil-cluster-admin-ns-02: 0.000000 -> 0.006519
+      ns-01:compromised-app-01: 0.000000 -> 0.003524
+      ns-02:pivot-sa-evil-ns-02: 0.000000 -> 0.003524
+      ns-02:sa-evil: 0.000000 -> 0.003524
+      crb-sa-evil-cluster-admin: 0.000000 -> 0.003524

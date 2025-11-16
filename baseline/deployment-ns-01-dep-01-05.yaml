@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dep-01-05
+  namespace: ns-01
+  labels:
+    app: app-01-05
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-01-05
+  template:
+    metadata:
+      labels:
+        app: app-01-05
+    spec:
+      serviceAccountName: default
+      containers:
+      - name: nginx
+        image: nginx:1.25
+        ports:
+        - containerPort: 80

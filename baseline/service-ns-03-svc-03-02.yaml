@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-03-02
+  namespace: ns-03
+spec:
+  selector:
+    app: app-03-02
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80

@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: np-ns-02-allow-from-app-02-01-to-app-02-02
+  namespace: ns-02
+spec:
+  podSelector:
+    matchLabels:
+      app: app-02-02
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: app-02-01
+  policyTypes:
+  - Ingress
