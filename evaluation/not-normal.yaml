@@ -1,0 +1,185 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: attacker-sa
+  namespace: team-a
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: attacker-global-read
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "namespaces"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: attacker-global-read-binding
+subjects:
+  - kind: ServiceAccount
+    name: attacker-sa
+    namespace: team-a
+roleRef:
+  kind: ClusterRole
+  name: attacker-global-read
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: attacker-pod
+  namespace: team-a
+  labels:
+    app: attacker
+spec:
+  serviceAccountName: attacker-sa
+  containers:
+    - name: attacker
+      image: curlimages/curl:8.10.0
+      command: ["sleep", "3600"]
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-b
+  namespace: team-b
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-c
+  namespace: team-c
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-d
+  namespace: team-d
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victim-svc-b
+  namespace: team-b
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victim-svc-c
+  namespace: team-c
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: victim-svc-d
+  namespace: team-d
+  labels:
+    app: backend
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-other-ingress
+  namespace: team-b
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app: demo
+          podSelector:
+            matchLabels:
+              app: attacker
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-other-ingress
+  namespace: team-c
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app: demo
+          podSelector:
+            matchLabels:
+              app: attacker
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-other-ingress
+  namespace: team-d
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app: demo
+          podSelector:
+            matchLabels:
+              app: attacker

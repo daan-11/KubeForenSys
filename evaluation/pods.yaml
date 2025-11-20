@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-b-2
+  namespace: team-b
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-b-3
+  namespace: team-b
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-c-2
+  namespace: team-c
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-c-3
+  namespace: team-c
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-d-2
+  namespace: team-d
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-pod-d-3
+  namespace: team-d
+  labels:
+    app: backend
+spec:
+  containers:
+    - name: backend
+      image: nginx:1.27-alpine
+      ports:
+        - containerPort: 80
+---
+# Add matching network policies for newly created pods, if needed
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-other-ingress-extended
+  namespace: team-b
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app: demo
+          podSelector:
+            matchLabels:
+              app: attacker
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-other-ingress-extended
+  namespace: team-c
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app: demo
+          podSelector:
+            matchLabels:
+              app: attacker
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-other-ingress-extended
+  namespace: team-d
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app: demo
+          podSelector:
+            matchLabels:
+              app: attacker

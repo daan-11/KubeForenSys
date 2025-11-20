@@ -73,7 +73,6 @@ def main():
     from src.graphing.graph_analysis import run_live_security_analyses
     graph_builder = Neo4jGraphBuilder()
 
-    # Load last upload times from config if present (and not --initial)
     table_names = [
         "nodes_CL", "services_CL", "endpoints_CL", "deployments_CL", "replicasets_CL",
         "statefulsets_CL", "namespaces_CL", "kubelogs_CL", "kubeevents_CL", 
@@ -91,11 +90,10 @@ def main():
                 except Exception:
                     last_fetch_times[k] = None
 
-    # Ensure pods are collected and upserted before any resource that references them
     data_sources = {
         "nodes_CL": fetcher.get_nodes,
         "namespaces_CL": fetcher.get_namespaces,
-        "kubelogs_CL": fetcher.retrieve_logs_from_pods,  # Pods first
+        "kubelogs_CL": fetcher.retrieve_logs_from_pods,
         "services_CL": fetcher.get_services,
         "endpoints_CL": fetcher.get_endpoints,
         "networkpolicies_CL": fetcher.get_network_policies,
@@ -121,7 +119,6 @@ def main():
                 continue  # Skip if monitoring is enabled
 
             since_time = last_fetch_times[table_name]
-            # Pass graph_builder to all collectors
             data_items = list(fetch_function(graph_builder=graph_builder, since_time=since_time))
 
             def data_gen():
@@ -141,40 +138,32 @@ def main():
                 config_data["last_upload"][table_name] = now.isoformat()
                 updated = True
 
-        # Save updated last_upload times and last_seen_state to config file
         if updated:
             with open(CONFIG_PATH, "w") as f:
                 json.dump(config_data, f)
 
-    # Run once if --initial is set (even if --continuous is not)
     if user_settings.get("continuous"):
         while True:
             run_collection()
-            # After each main run, convert Neo4j -> NetworkX and validate
             try:
                 G, report = graph_builder.to_networkx_full_graph()
-                # Log any discrepancies
                 neo_nodes = report.get("neo4j_node_count")
                 neo_rels = report.get("neo4j_rel_count")
                 nx_nodes = report.get("networkx_node_count")
                 nx_rels = report.get("networkx_rel_count")
                 if (neo_nodes is not None and neo_nodes != nx_nodes) or (neo_rels is not None and neo_rels != nx_rels):
                     logger.warning(f"Graph discrepancy detected after run: neo4j nodes={neo_nodes} networkx nodes={nx_nodes}; neo4j rels={neo_rels} networkx rels={nx_rels}")
-                    # Print details for quick debugging
                     print("Discrepancy detail summary:")
                     print(f"  node_discrepancies: {report.get('node_discrepancies')}")
                     print(f"  rel_discrepancies: {report.get('rel_discrepancies')}")
-                # Run focused LIVE security analyses and persist state for temporal detection
                 try:
                     prev_graph_state = (config_data or {}).get("graph_state", {}) if config_data is not None else {}
                     print("Running LIVE security analyses (betweenness, communities, temporal anomalies, closeness, pagerank)...")
                     analysis = run_live_security_analyses(G, previous_state=prev_graph_state, print_results=True, top_k=10)
-                    # Persist updated state for next iteration
                     new_state = analysis.get("updated_state", {})
                     if config_data is None:
                         config_data = {}
                     config_data["graph_state"] = new_state
-                    # Always save state since this is crucial for temporal detection
                     with open(CONFIG_PATH, "w") as f:
                         json.dump(config_data, f)
                 except Exception as e:
@@ -185,7 +174,6 @@ def main():
         graph_builder.close()
     else:
         run_collection()
-        # Do a final conversion/validation on the one-shot run as well
         try:
             G, report = graph_builder.to_networkx_full_graph()
             neo_nodes = report.get("neo4j_node_count")
